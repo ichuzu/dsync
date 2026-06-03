@@ -1,5 +1,11 @@
 import type { Achievement, Game } from "@/types/game";
-import type { LibraryStats, SteamPresence, SteamProfile } from "@/lib/steam";
+import type {
+  LibraryStats,
+  NewsItem,
+  SteamPresence,
+  SteamProfile,
+  UpcomingGame,
+} from "@/lib/steam";
 
 /**
  * Browser-side client for our server Steam API. In dev these routes are served
@@ -57,6 +63,48 @@ export async function fetchSteamLibrary(
 export async function fetchSteamLibraryStats(steamId: string): Promise<LibraryStats> {
   const res = await fetch(`${BASE}/stats?steamid=${encodeURIComponent(steamId)}`);
   return asJson(res);
+}
+
+/** Primary genre per appid for the user's most-played games (server-computed). */
+export async function fetchSteamGenres(
+  steamId: string,
+): Promise<Record<string, string>> {
+  const res = await fetch(`${BASE}/genres?steamid=${encodeURIComponent(steamId)}`);
+  const { genres } = await asJson(res);
+  return genres ?? {};
+}
+
+/** Personalized news feed: recent announcements for the user's played games. */
+export async function fetchSteamNews(steamId: string): Promise<NewsItem[]> {
+  const res = await fetch(`${BASE}/news?steamid=${encodeURIComponent(steamId)}`);
+  const { news } = await asJson(res);
+  return news ?? [];
+}
+
+/** Recent English news for games on the user's wishlist. */
+export async function fetchSteamWishlistNews(steamId: string): Promise<NewsItem[]> {
+  const res = await fetch(`${BASE}/wishlist-news?steamid=${encodeURIComponent(steamId)}`);
+  const { news } = await asJson(res);
+  return news ?? [];
+}
+
+/** Unreleased wishlist games, soonest first. */
+export async function fetchSteamUpcoming(steamId: string): Promise<UpcomingGame[]> {
+  const res = await fetch(`${BASE}/upcoming?steamid=${encodeURIComponent(steamId)}`);
+  const { upcoming } = await asJson(res);
+  return upcoming ?? [];
+}
+
+/** Full, untruncated content for one news item (for the in-app reader). */
+export async function fetchSteamNewsItem(
+  appid: string | number,
+  gid: string,
+): Promise<NewsItem | null> {
+  const res = await fetch(
+    `${BASE}/newsitem?appid=${encodeURIComponent(String(appid))}&gid=${encodeURIComponent(gid)}`,
+  );
+  const { item } = await asJson(res);
+  return item ?? null;
 }
 
 export async function fetchSteamPresence(steamId: string): Promise<SteamPresence> {

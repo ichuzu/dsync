@@ -4,6 +4,8 @@ import { GameCard } from "@/components/GameCard";
 import { GameListItem } from "@/components/GameListItem";
 import { GameDetailDrawer } from "@/components/GameDetailDrawer";
 import { AchievementStats } from "@/components/AchievementStats";
+import { GameNewsFeed } from "@/components/GameNewsFeed";
+import { UpcomingGames } from "@/components/UpcomingGames";
 import { CollectionsPanel } from "@/components/CollectionsPanel";
 import { AuthButton } from "@/components/AuthButton";
 import { UserProfile } from "@/components/UserProfile";
@@ -41,7 +43,15 @@ import {
 } from "@/types/game";
 import { useSteam } from "@/hooks/useSteam";
 import { useCollections } from "@/hooks/useCollections";
+import { useFollowedGames } from "@/hooks/useFollowedGames";
 import { cn } from "@/lib/utils";
+
+// How many recently-played games to follow by default (until the user picks).
+const DEFAULT_FOLLOW_COUNT = 8;
+
+// Stable empties for the non-manageable wishlist-news feed.
+const EMPTY_SET: Set<string> = new Set();
+const NOOP = () => {};
 
 type StatusFilter = "all" | "playing" | "perfect" | "in-progress" | "unsynced";
 type SortKey = "recent" | "completion" | "playtime" | "title";
@@ -66,6 +76,7 @@ const Index = () => {
   const games: Game[] = usingSteam ? steam.library : mockGames;
 
   const { collections } = useCollections();
+  const { followed: customFollowed, setFollowed } = useFollowedGames();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [collectionFilter, setCollectionFilter] = useState("all");
@@ -127,6 +138,26 @@ const Index = () => {
   const nowPlayingGame = nowPlaying?.gameId
     ? games.find((g) => g.id === nowPlaying.gameId) ?? null
     : null;
+
+  // Default subscriptions: the games you've played most recently. Once you
+  // customize the list it sticks; until then we follow these automatically.
+  const recentDefault = useMemo(() => {
+    const recent = games
+      .filter((g) => (g.recentPlaytimeHours ?? 0) > 0)
+      .sort((a, b) => (b.recentPlaytimeHours ?? 0) - (a.recentPlaytimeHours ?? 0));
+    const base = recent.length
+      ? recent
+      : [...games].sort((a, b) => b.playtimeHours - a.playtimeHours);
+    return base.slice(0, DEFAULT_FOLLOW_COUNT).map((g) => g.id);
+  }, [games]);
+
+  const effectiveFollowed = customFollowed ?? recentDefault;
+  const followedSet = useMemo(() => new Set(effectiveFollowed), [effectiveFollowed]);
+
+  const toggleFollow = (id: string) => {
+    const base = customFollowed ?? recentDefault;
+    setFollowed(base.includes(id) ? base.filter((x) => x !== id) : [...base, id]);
+  };
 
   const visibleGames = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -233,6 +264,38 @@ const Index = () => {
               </span>
             )}
           </button>
+        )}
+
+        {/* News from your games (gamehub feed) — full-width tile strip */}
+        <GameNewsFeed
+          news={usingSteam ? steam.news : []}
+          followed={followedSet}
+          candidates={games.map((g) => ({ id: g.id, title: g.title }))}
+          onToggleFollow={toggleFollow}
+          manageable={usingSteam}
+          loading={usingSteam && steam.newsLoading}
+          emptyMessage="Sign in with Steam to follow your games and see the latest news, updates, and patch notes."
+        />
+
+        {/* Wishlist news + upcoming releases — only meaningful once signed in */}
+        {usingSteam && (
+          <>
+            <GameNewsFeed
+              title="News from your wishlist"
+              news={steam.wishlistNews}
+              followed={EMPTY_SET}
+              candidates={[]}
+              onToggleFollow={NOOP}
+              manageable={false}
+              loading={steam.wishlistNewsLoading}
+              emptyMessage="No recent news from your wishlist. (Your Steam wishlist must be public.)"
+            />
+            <UpcomingGames
+              games={steam.upcoming}
+              loading={steam.upcomingLoading}
+              emptyMessage="No upcoming releases on your wishlist. (Your Steam wishlist must be public.)"
+            />
+          </>
         )}
 
         {/* Summary KPIs */}

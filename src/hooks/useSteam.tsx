@@ -8,12 +8,22 @@ import {
   type ReactNode,
 } from "react";
 import type { Game } from "@/types/game";
-import type { LibraryStats, SteamPresence, SteamProfile } from "@/lib/steam";
+import type {
+  LibraryStats,
+  NewsItem,
+  SteamPresence,
+  SteamProfile,
+  UpcomingGame,
+} from "@/lib/steam";
 import {
+  fetchSteamGenres,
   fetchSteamLibrary,
   fetchSteamLibraryStats,
+  fetchSteamNews,
   fetchSteamPresence,
   fetchSteamProfile,
+  fetchSteamUpcoming,
+  fetchSteamWishlistNews,
   redirectToSteamLogin,
   verifySteamLogin,
 } from "@/lib/steamClient";
@@ -32,6 +42,18 @@ interface SteamContextValue {
   /** Accurate whole-library achievement stats (computed in the background). */
   libraryStats: LibraryStats | null;
   statsLoading: boolean;
+  /** appid → primary genre for the most-played games (computed in background). */
+  genres: Record<string, string>;
+  genresLoading: boolean;
+  /** Recent news for the user's played games, newest-first (background). */
+  news: NewsItem[];
+  newsLoading: boolean;
+  /** Recent news for the user's wishlisted games (background). */
+  wishlistNews: NewsItem[];
+  wishlistNewsLoading: boolean;
+  /** Unreleased wishlist games, soonest first (background). */
+  upcoming: UpcomingGame[];
+  upcomingLoading: boolean;
   /** Live presence (online + in-game right now), polled while connected. */
   presence: SteamPresence | null;
   status: SteamStatus;
@@ -118,6 +140,86 @@ const writeStatsCache = (steamId: string, stats: LibraryStats) => {
   }
 };
 
+const genresKey = (steamId: string) => `dsync.steam.genres.${steamId}`;
+// Genres barely change, and re-resolving them is a burst of store-API calls —
+// keep the cache for a week before refreshing in the background.
+const GENRE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+interface CachedGenres {
+  ts: number;
+  genres: Record<string, string>;
+}
+
+const readGenreCache = (steamId: string): CachedGenres | null => {
+  try {
+    const raw = localStorage.getItem(genresKey(steamId));
+    return raw ? (JSON.parse(raw) as CachedGenres) : null;
+  } catch {
+    return null;
+  }
+};
+
+const writeGenreCache = (steamId: string, genres: Record<string, string>) => {
+  try {
+    localStorage.setItem(genresKey(steamId), JSON.stringify({ ts: Date.now(), genres }));
+  } catch {
+    /* ignore */
+  }
+};
+
+// Bump the version suffix to invalidate stale caches when the feed's shape or
+// filtering changes (e.g. the English-only filter).
+const newsKey = (steamId: string) => `dsync.steam.news.v2.${steamId}`;
+// News goes stale quickly — refresh in the background after half an hour.
+const NEWS_TTL_MS = 30 * 60 * 1000;
+
+interface CachedNews {
+  ts: number;
+  news: NewsItem[];
+}
+
+const readNewsCache = (steamId: string): CachedNews | null => {
+  try {
+    const raw = localStorage.getItem(newsKey(steamId));
+    return raw ? (JSON.parse(raw) as CachedNews) : null;
+  } catch {
+    return null;
+  }
+};
+
+const writeNewsCache = (steamId: string, news: NewsItem[]) => {
+  try {
+    localStorage.setItem(newsKey(steamId), JSON.stringify({ ts: Date.now(), news }));
+  } catch {
+    /* ignore */
+  }
+};
+
+// Generic timestamped cache for the wishlist-derived feeds.
+const readTsCache = <T,>(key: string): { ts: number; data: T } | null => {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as { ts: number; data: T }) : null;
+  } catch {
+    return null;
+  }
+};
+
+const writeTsCache = (key: string, data: unknown) => {
+  try {
+    localStorage.setItem(key, JSON.stringify({ ts: Date.now(), data }));
+  } catch {
+    /* ignore */
+  }
+};
+
+// v2: switched from the retired store wishlistdata endpoint to the wishlist API.
+const wishlistNewsKey = (steamId: string) => `dsync.steam.wishlistnews.v2.${steamId}`;
+// v3: release dates now carry display text + granularity (precise vs month/year).
+const upcomingCacheKey = (steamId: string) => `dsync.steam.upcoming.v3.${steamId}`;
+// Upcoming release dates move slowly — a few hours between refreshes is plenty.
+const UPCOMING_TTL_MS = 6 * 60 * 60 * 1000;
+
 const SteamContext = createContext<SteamContextValue | null>(null);
 
 export const SteamProvider = ({ children }: { children: ReactNode }) => {
@@ -143,11 +245,35 @@ export const SteamProvider = ({ children }: { children: ReactNode }) => {
     return s ? readStatsCache(s.steamId)?.stats ?? null : null;
   });
   const [statsLoading, setStatsLoading] = useState(false);
+  const [genres, setGenres] = useState<Record<string, string>>(() => {
+    const s = readSession();
+    return s ? readGenreCache(s.steamId)?.genres ?? {} : {};
+  });
+  const [genresLoading, setGenresLoading] = useState(false);
+  const [news, setNews] = useState<NewsItem[]>(() => {
+    const s = readSession();
+    return s ? readNewsCache(s.steamId)?.news ?? [] : [];
+  });
+  const [newsLoading, setNewsLoading] = useState(false);
+  const [wishlistNews, setWishlistNews] = useState<NewsItem[]>(() => {
+    const s = readSession();
+    return s ? readTsCache<NewsItem[]>(wishlistNewsKey(s.steamId))?.data ?? [] : [];
+  });
+  const [wishlistNewsLoading, setWishlistNewsLoading] = useState(false);
+  const [upcoming, setUpcoming] = useState<UpcomingGame[]>(() => {
+    const s = readSession();
+    return s ? readTsCache<UpcomingGame[]>(upcomingCacheKey(s.steamId))?.data ?? [] : [];
+  });
+  const [upcomingLoading, setUpcomingLoading] = useState(false);
   const [presence, setPresence] = useState<SteamPresence | null>(null);
 
   // Prevents duplicate concurrent fetches for the same Steam ID.
   const inFlight = useRef<string | null>(null);
   const statsInFlight = useRef<string | null>(null);
+  const genresInFlight = useRef<string | null>(null);
+  const newsInFlight = useRef<string | null>(null);
+  const wishlistNewsInFlight = useRef<string | null>(null);
+  const upcomingInFlight = useRef<string | null>(null);
 
   const loadStats = useCallback(async (steamId: string) => {
     if (statsInFlight.current === steamId) return;
@@ -162,6 +288,70 @@ export const SteamProvider = ({ children }: { children: ReactNode }) => {
     } finally {
       setStatsLoading(false);
       statsInFlight.current = null;
+    }
+  }, []);
+
+  const loadGenres = useCallback(async (steamId: string) => {
+    if (genresInFlight.current === steamId) return;
+    genresInFlight.current = steamId;
+    setGenresLoading(true);
+    try {
+      const g = await fetchSteamGenres(steamId);
+      setGenres(g);
+      writeGenreCache(steamId, g);
+    } catch {
+      /* keep cached/empty genres on failure */
+    } finally {
+      setGenresLoading(false);
+      genresInFlight.current = null;
+    }
+  }, []);
+
+  const loadNews = useCallback(async (steamId: string) => {
+    if (newsInFlight.current === steamId) return;
+    newsInFlight.current = steamId;
+    setNewsLoading(true);
+    try {
+      const n = await fetchSteamNews(steamId);
+      setNews(n);
+      writeNewsCache(steamId, n);
+    } catch {
+      /* keep cached/empty news on failure */
+    } finally {
+      setNewsLoading(false);
+      newsInFlight.current = null;
+    }
+  }, []);
+
+  const loadWishlistNews = useCallback(async (steamId: string) => {
+    if (wishlistNewsInFlight.current === steamId) return;
+    wishlistNewsInFlight.current = steamId;
+    setWishlistNewsLoading(true);
+    try {
+      const n = await fetchSteamWishlistNews(steamId);
+      setWishlistNews(n);
+      writeTsCache(wishlistNewsKey(steamId), n);
+    } catch {
+      /* keep cached/empty on failure */
+    } finally {
+      setWishlistNewsLoading(false);
+      wishlistNewsInFlight.current = null;
+    }
+  }, []);
+
+  const loadUpcoming = useCallback(async (steamId: string) => {
+    if (upcomingInFlight.current === steamId) return;
+    upcomingInFlight.current = steamId;
+    setUpcomingLoading(true);
+    try {
+      const u = await fetchSteamUpcoming(steamId);
+      setUpcoming(u);
+      writeTsCache(upcomingCacheKey(steamId), u);
+    } catch {
+      /* keep cached/empty on failure */
+    } finally {
+      setUpcomingLoading(false);
+      upcomingInFlight.current = null;
     }
   }, []);
 
@@ -226,6 +416,50 @@ export const SteamProvider = ({ children }: { children: ReactNode }) => {
     loadStats(steamId);
   }, [steamId, loadStats]);
 
+  // Per-game genres: hydrate from cache, refresh in the background if stale.
+  useEffect(() => {
+    if (!steamId) return;
+    const cache = readGenreCache(steamId);
+    if (cache) {
+      setGenres(cache.genres);
+      if (Date.now() - cache.ts < GENRE_TTL_MS) return;
+    }
+    loadGenres(steamId);
+  }, [steamId, loadGenres]);
+
+  // News feed: hydrate from cache, refresh in the background if stale.
+  useEffect(() => {
+    if (!steamId) return;
+    const cache = readNewsCache(steamId);
+    if (cache) {
+      setNews(cache.news);
+      if (Date.now() - cache.ts < NEWS_TTL_MS) return;
+    }
+    loadNews(steamId);
+  }, [steamId, loadNews]);
+
+  // Wishlist news: hydrate from cache, refresh in the background if stale.
+  useEffect(() => {
+    if (!steamId) return;
+    const cache = readTsCache<NewsItem[]>(wishlistNewsKey(steamId));
+    if (cache) {
+      setWishlistNews(cache.data);
+      if (Date.now() - cache.ts < NEWS_TTL_MS) return;
+    }
+    loadWishlistNews(steamId);
+  }, [steamId, loadWishlistNews]);
+
+  // Upcoming wishlist releases: hydrate from cache, refresh if stale.
+  useEffect(() => {
+    if (!steamId) return;
+    const cache = readTsCache<UpcomingGame[]>(upcomingCacheKey(steamId));
+    if (cache) {
+      setUpcoming(cache.data);
+      if (Date.now() - cache.ts < UPCOMING_TTL_MS) return;
+    }
+    loadUpcoming(steamId);
+  }, [steamId, loadUpcoming]);
+
   // Live presence — poll every 60s while connected.
   useEffect(() => {
     if (!steamId) {
@@ -267,6 +501,10 @@ export const SteamProvider = ({ children }: { children: ReactNode }) => {
       try {
         localStorage.removeItem(libraryKey(session.steamId));
         localStorage.removeItem(statsKey(session.steamId));
+        localStorage.removeItem(genresKey(session.steamId));
+        localStorage.removeItem(newsKey(session.steamId));
+        localStorage.removeItem(wishlistNewsKey(session.steamId));
+        localStorage.removeItem(upcomingCacheKey(session.steamId));
       } catch {
         /* ignore */
       }
@@ -275,6 +513,10 @@ export const SteamProvider = ({ children }: { children: ReactNode }) => {
     setSession(null);
     setLibrary([]);
     setLibraryStats(null);
+    setGenres({});
+    setNews([]);
+    setWishlistNews([]);
+    setUpcoming([]);
     setLastSynced(null);
     setStatus("idle");
     setError(null);
@@ -284,8 +526,21 @@ export const SteamProvider = ({ children }: { children: ReactNode }) => {
     if (session?.steamId) {
       loadLibrary(session.steamId, { background: library.length > 0 });
       loadStats(session.steamId);
+      loadGenres(session.steamId);
+      loadNews(session.steamId);
+      loadWishlistNews(session.steamId);
+      loadUpcoming(session.steamId);
     }
-  }, [session?.steamId, loadLibrary, loadStats, library.length]);
+  }, [
+    session?.steamId,
+    loadLibrary,
+    loadStats,
+    loadGenres,
+    loadNews,
+    loadWishlistNews,
+    loadUpcoming,
+    library.length,
+  ]);
 
   const value: SteamContextValue = {
     connected: Boolean(session),
@@ -293,6 +548,14 @@ export const SteamProvider = ({ children }: { children: ReactNode }) => {
     library,
     libraryStats,
     statsLoading,
+    genres,
+    genresLoading,
+    news,
+    newsLoading,
+    wishlistNews,
+    wishlistNewsLoading,
+    upcoming,
+    upcomingLoading,
     presence,
     status,
     refreshing,

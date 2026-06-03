@@ -139,6 +139,31 @@ export async function fetchCover(
   }
 }
 
+/**
+ * Primary genre for one app, via the public store API. Genre isn't part of the
+ * owned-games payload, so it needs a separate per-app lookup. Returns "" when
+ * unknown (delisted app, no genre listed, or a transient error). Server-side.
+ */
+export async function fetchGenre(
+  appid: number,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string> {
+  try {
+    const res = await fetchImpl(
+      `https://store.steampowered.com/api/appdetails?appids=${appid}&l=english`,
+    );
+    if (!res.ok) return "";
+    const app = (await res.json())?.[appid];
+    if (!app?.success) return "";
+    const genres = app.data?.genres;
+    return Array.isArray(genres) && genres.length
+      ? String(genres[0]?.description ?? "")
+      : "";
+  } catch {
+    return "";
+  }
+}
+
 /** Live presence: whether the player is online and in a game right now. */
 export async function fetchPresence(
   steamId: string,
@@ -477,6 +502,379 @@ export async function fetchLibraryStats(
     started,
     activity,
   };
+}
+
+/**
+ * Resolve the primary genre for the user's most-played games, keyed by appid.
+ * Genre comes from one store lookup per app, so this is bounded to the top
+ * `max` games by playtime (which cover essentially all playtime anyway) and
+ * runs with low concurrency to respect the store API's rate limits. Run in the
+ * background and cache the result. Apps with no resolvable genre are omitted.
+ */
+export async function fetchLibraryGenres(
+  steamId: string,
+  apiKey: string,
+  fetchImpl: typeof fetch = fetch,
+  options: { max?: number } = {},
+): Promise<Record<string, string>> {
+  const max = options.max ?? 100;
+  const owned = await fetchOwnedGames(steamId, apiKey, fetchImpl);
+  const targets = owned
+    .filter((g) => (g.playtime_forever ?? 0) > 0)
+    .sort((a, b) => (b.playtime_forever ?? 0) - (a.playtime_forever ?? 0))
+    .slice(0, max);
+
+  const pairs = await mapLimit(targets, 5, async (g) => {
+    const genre = await fetchGenre(g.appid, fetchImpl);
+    return [String(g.appid), genre] as const;
+  });
+
+  const out: Record<string, string> = {};
+  for (const [appid, genre] of pairs) if (genre) out[appid] = genre;
+  return out;
+}
+
+export interface NewsItem {
+  gid: string;
+  appid: number;
+  /** Title of the game this news item belongs to. */
+  game: string;
+  title: string;
+  url: string;
+  author?: string;
+  /** Body, truncated server-side; may contain BBCode/HTML. */
+  contents: string;
+  /** Publish time, unix seconds. */
+  date: number;
+  feedlabel?: string;
+}
+
+/**
+ * Steam's news API has no reliable language filter — a game's feed mixes
+ * localized posts (Russian, Chinese, …). Treat a headline as English-ish when
+ * fewer than ~30% of its letters fall outside the Latin blocks, which drops
+ * Cyrillic/CJK/etc. announcements while keeping ordinary English ones.
+ */
+const looksEnglish = (text: string): boolean => {
+  const letters = text.replace(/[^\p{L}]/gu, "");
+  if (!letters) return false;
+  const nonLatin = (letters.match(/[^\u0020-\u024f]/g) ?? []).length;
+  return nonLatin / letters.length < 0.3;
+};
+
+/** Strip BBCode/HTML so the language check sees real words, not markup. */
+const stripMarkup = (raw: string): string =>
+  raw
+    .replace(/\[[^\]]*\]/g, " ")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+/**
+ * Backstop for external press feeds (e.g. gamemag.ru) whose headline is just an
+ * English game name but whose body is foreign-language: block clearly
+ * non-English source TLDs outright.
+ */
+const NON_ENGLISH_TLDS = new Set([
+  "ru", "by", "ua", "kz", "cn", "jp", "kr", "tw", "hk", "th", "vn",
+]);
+
+const isNonEnglishSource = (url: string): boolean => {
+  try {
+    const host = new URL(url).hostname;
+    const tld = host.slice(host.lastIndexOf(".") + 1).toLowerCase();
+    return NON_ENGLISH_TLDS.has(tld);
+  } catch {
+    return false;
+  }
+};
+
+/** Recent news/announcements for one app (Steam News API — no key needed). */
+async function fetchGameNews(
+  appid: number,
+  count: number,
+  fetchImpl: typeof fetch,
+): Promise<Omit<NewsItem, "game">[]> {
+  const url =
+    `${STEAM_API}/ISteamNews/GetNewsForApp/v2/?appid=${appid}` +
+    `&count=${count}&maxlength=400&format=json`;
+  try {
+    const res = await fetchImpl(url);
+    if (!res.ok) return [];
+    const data = await res.json();
+    const list = data?.appnews?.newsitems ?? [];
+    return list.map((n: Record<string, unknown>) => ({
+      gid: String(n.gid ?? ""),
+      appid: Number(n.appid) || appid,
+      title: String(n.title ?? ""),
+      url: String(n.url ?? ""),
+      author: n.author ? String(n.author) : undefined,
+      contents: String(n.contents ?? ""),
+      date: Number(n.date) || 0,
+      feedlabel: n.feedlabel ? String(n.feedlabel) : undefined,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Fetch + merge recent news for a set of games, newest-first, keeping only
+ * English-language items. Shared by the library and wishlist feeds.
+ */
+async function aggregateNews(
+  targets: Array<{ appid: number; name: string }>,
+  perGame: number,
+  limit: number,
+  fetchImpl: typeof fetch,
+): Promise<NewsItem[]> {
+  const nameById = new Map(targets.map((t) => [t.appid, t.name]));
+  const lists = await mapLimit(targets, 6, (g) =>
+    fetchGameNews(g.appid, perGame, fetchImpl),
+  );
+
+  const items: NewsItem[] = [];
+  for (const list of lists) {
+    for (const it of list) {
+      if (isNonEnglishSource(it.url)) continue;
+      // Check title and body: external press often has an English game name as
+      // the title but a foreign-language body.
+      const body = stripMarkup(it.contents);
+      if (!looksEnglish(it.title) || !looksEnglish(`${it.title} ${body}`)) continue;
+      items.push({ ...it, game: nameById.get(it.appid) ?? `App ${it.appid}` });
+    }
+  }
+  items.sort((a, b) => b.date - a.date);
+  return items.slice(0, limit);
+}
+
+/**
+ * A personalized news feed: recent announcements for the user's most-played
+ * games, merged newest-first. Bounded to the top `maxGames` by playtime to keep
+ * the number of Steam calls in check. Run in the background and cache.
+ */
+export async function fetchLibraryNews(
+  steamId: string,
+  apiKey: string,
+  fetchImpl: typeof fetch = fetch,
+  options: { maxGames?: number; perGame?: number; limit?: number } = {},
+): Promise<NewsItem[]> {
+  const maxGames = options.maxGames ?? 50;
+  const owned = await fetchOwnedGames(steamId, apiKey, fetchImpl);
+  const targets = owned
+    .filter((g) => (g.playtime_forever ?? 0) > 0)
+    .sort((a, b) => (b.playtime_forever ?? 0) - (a.playtime_forever ?? 0))
+    .slice(0, maxGames)
+    .map((g) => ({ appid: g.appid, name: g.name }));
+
+  return aggregateNews(targets, options.perGame ?? 3, options.limit ?? 80, fetchImpl);
+}
+
+export interface WishlistGame {
+  appid: number;
+  name: string;
+  /** Sort key: unix seconds (best-effort); 0 if undated (TBA). */
+  releaseDate: number;
+  /** Raw Steam display text ("8 Jun, 2026", "July 2026", "Q1 2026", …). */
+  releaseString: string;
+  /** True only when Steam gives a day-level date (so a day countdown is valid). */
+  precise: boolean;
+  /** Not yet released (Steam "Coming soon" flag). */
+  comingSoon: boolean;
+}
+
+/**
+ * Parse Steam's release display string into a sort timestamp + a granularity
+ * flag. Day-level dates ("8 Jun, 2026") are `precise`; month/year ones get a
+ * representative timestamp but aren't precise (so we never fake a day
+ * countdown); vague text ("Q1 2026", "Coming soon") yields 0 / not precise.
+ */
+const parseRelease = (raw: string): { unix: number; precise: boolean } => {
+  const s = (raw || "").trim();
+  if (!s) return { unix: 0, precise: false };
+
+  const dayLevel =
+    /^\d{1,2}\s+[A-Za-z]+,?\s+\d{4}$/.test(s) || // "8 Jun, 2026"
+    /^[A-Za-z]+\s+\d{1,2},?\s+\d{4}$/.test(s); // "Jun 8, 2026"
+  if (dayLevel) {
+    const t = Date.parse(s);
+    if (!Number.isNaN(t)) return { unix: Math.floor(t / 1000), precise: true };
+  }
+
+  const month = s.match(/^([A-Za-z]+)\s+(\d{4})$/); // "July 2026"
+  if (month) {
+    const t = Date.parse(`1 ${month[1]} ${month[2]}`);
+    if (!Number.isNaN(t)) return { unix: Math.floor(t / 1000), precise: false };
+  }
+
+  const year = s.match(/^(\d{4})$/); // "2026" → mid-year as a sort midpoint
+  if (year) {
+    const t = Date.parse(`1 Jul ${year[1]}`);
+    if (!Number.isNaN(t)) return { unix: Math.floor(t / 1000), precise: false };
+  }
+
+  return { unix: 0, precise: false }; // "Q1 2026", "Coming soon", "TBA", …
+};
+
+/**
+ * Wishlisted appids via the current wishlist API (the old store `wishlistdata`
+ * endpoint was retired in 2025). Needs a key; readable only when the user's
+ * game details are public. Returns [] otherwise.
+ */
+async function fetchWishlistAppids(
+  steamId: string,
+  apiKey: string,
+  fetchImpl: typeof fetch,
+): Promise<number[]> {
+  const url = `${STEAM_API}/IWishlistService/GetWishlist/v1/?key=${apiKey}&steamid=${steamId}`;
+  try {
+    const res = await fetchImpl(url);
+    if (!res.ok) return [];
+    const data = await res.json();
+    const items = data?.response?.items ?? [];
+    return items.map((i: Record<string, unknown>) => Number(i.appid)).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/** Name + release info for one app (lean appdetails filter). */
+async function fetchAppSummary(
+  appid: number,
+  fetchImpl: typeof fetch,
+): Promise<{
+  name: string;
+  comingSoon: boolean;
+  releaseUnix: number;
+  releaseString: string;
+  precise: boolean;
+}> {
+  const empty = { name: "", comingSoon: false, releaseUnix: 0, releaseString: "", precise: false };
+  try {
+    const res = await fetchImpl(
+      `https://store.steampowered.com/api/appdetails?appids=${appid}&filters=basic,release_date&l=english`,
+    );
+    if (!res.ok) return empty;
+    const app = (await res.json())?.[appid];
+    if (!app?.success) return empty;
+    const data = app.data ?? {};
+    const rd = data.release_date ?? {};
+    const releaseString = String(rd.date ?? "");
+    const { unix, precise } = parseRelease(releaseString);
+    return {
+      name: String(data.name ?? ""),
+      comingSoon: Boolean(rd.coming_soon),
+      releaseUnix: unix,
+      releaseString,
+      precise,
+    };
+  } catch {
+    return empty;
+  }
+}
+
+/**
+ * The user's wishlist, enriched with name + release info. One appdetails call
+ * per app (concurrency-bounded, capped), so it's heavy — cache the result.
+ */
+export async function fetchWishlist(
+  steamId: string,
+  apiKey: string,
+  fetchImpl: typeof fetch = fetch,
+  options: { max?: number } = {},
+): Promise<WishlistGame[]> {
+  const appids = (await fetchWishlistAppids(steamId, apiKey, fetchImpl)).slice(
+    0,
+    options.max ?? 120,
+  );
+  return mapLimit(appids, 5, async (appid) => {
+    const s = await fetchAppSummary(appid, fetchImpl);
+    return {
+      appid,
+      name: s.name || `App ${appid}`,
+      releaseDate: s.releaseUnix,
+      releaseString: s.releaseString,
+      precise: s.precise,
+      comingSoon: s.comingSoon,
+    };
+  });
+}
+
+/** Recent English news for games on an already-fetched wishlist, newest-first. */
+export async function buildWishlistNews(
+  wishlist: WishlistGame[],
+  fetchImpl: typeof fetch = fetch,
+  options: { maxGames?: number; perGame?: number; limit?: number } = {},
+): Promise<NewsItem[]> {
+  const targets = wishlist
+    .slice(0, options.maxGames ?? 40)
+    .map((g) => ({ appid: g.appid, name: g.name }));
+  return aggregateNews(targets, options.perGame ?? 3, options.limit ?? 60, fetchImpl);
+}
+
+export interface UpcomingGame {
+  appid: number;
+  name: string;
+  /** Sort key: unix seconds (best-effort); 0 if undated (TBA). */
+  releaseDate: number;
+  /** Raw Steam display text ("July 2026", "Q1 2026", …). */
+  releaseString: string;
+  /** True only for day-level dates (so a day countdown is meaningful). */
+  precise: boolean;
+}
+
+/** Unreleased wishlist games, soonest release first (TBA last). Pure transform. */
+export function buildUpcoming(
+  wishlist: WishlistGame[],
+  options: { limit?: number } = {},
+): UpcomingGame[] {
+  const nowSec = Date.now() / 1000;
+  return wishlist
+    .filter((g) => g.comingSoon || g.releaseDate > nowSec)
+    .sort((a, b) => (a.releaseDate || Infinity) - (b.releaseDate || Infinity))
+    .slice(0, options.limit ?? 24)
+    .map((g) => ({
+      appid: g.appid,
+      name: g.name,
+      releaseDate: g.releaseDate,
+      releaseString: g.releaseString,
+      precise: g.precise,
+    }));
+}
+
+/**
+ * Full, untruncated content for a single news item. The Steam API has no
+ * fetch-by-gid, so we pull a recent batch for the app and find the match. The
+ * `game` field is left blank — the caller already knows it from the feed.
+ */
+export async function fetchNewsItem(
+  appid: number,
+  gid: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<NewsItem | null> {
+  const url =
+    `${STEAM_API}/ISteamNews/GetNewsForApp/v2/?appid=${appid}&count=50&format=json`;
+  try {
+    const res = await fetchImpl(url);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const list = data?.appnews?.newsitems ?? [];
+    const n = list.find((x: Record<string, unknown>) => String(x.gid) === String(gid));
+    if (!n) return null;
+    return {
+      gid: String(n.gid ?? gid),
+      appid: Number(n.appid) || appid,
+      game: "",
+      title: String(n.title ?? ""),
+      url: String(n.url ?? ""),
+      author: n.author ? String(n.author) : undefined,
+      contents: String(n.contents ?? ""),
+      date: Number(n.date) || 0,
+      feedlabel: n.feedlabel ? String(n.feedlabel) : undefined,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export interface BuildLibraryOptions {

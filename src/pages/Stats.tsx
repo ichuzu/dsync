@@ -15,6 +15,7 @@ import {
   Gamepad2,
   PackageOpen,
   Activity,
+  PieChart as PieChartIcon,
 } from "lucide-react";
 import { mockGames } from "@/data/mockGames";
 import {
@@ -25,7 +26,11 @@ import {
 } from "@/types/game";
 import { useSteam } from "@/hooks/useSteam";
 import { ContributionHeatmap } from "@/components/ContributionHeatmap";
+import { GenrePieChart, type GenreSlice } from "@/components/GenrePieChart";
 import { cn } from "@/lib/utils";
+
+// Slices past this many genres are folded into a single "Other" wedge.
+const MAX_GENRE_SLICES = 8;
 
 const MONTH_ABBR = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
@@ -39,6 +44,36 @@ const Stats = () => {
   const games: Game[] = usingSteam ? steam.library : mockGames;
   const accurate = usingSteam ? steam.libraryStats : null;
   const refining = usingSteam && steam.statsLoading && !accurate;
+
+  // Genre breakdown, weighted by playtime. Mock games carry their own genre;
+  // real Steam games get it from the background-resolved genres map (by appid).
+  const genreOf = (g: Game) => (usingSteam ? steam.genres[g.id] : g.genre);
+  const genre = useMemo(() => {
+    const byGenre = new Map<string, number>();
+    let known = 0;
+    for (const g of games) {
+      if (g.playtimeHours <= 0) continue;
+      const name = genreOf(g);
+      if (!name) continue;
+      byGenre.set(name, (byGenre.get(name) ?? 0) + g.playtimeHours);
+      known += g.playtimeHours;
+    }
+    const sorted = [...byGenre.entries()]
+      .map(([name, hours]): GenreSlice => ({ name, hours }))
+      .sort((a, b) => b.hours - a.hours);
+
+    let slices = sorted;
+    if (sorted.length > MAX_GENRE_SLICES) {
+      const head = sorted.slice(0, MAX_GENRE_SLICES);
+      const otherHours = sorted
+        .slice(MAX_GENRE_SLICES)
+        .reduce((sum, s) => sum + s.hours, 0);
+      slices = [...head, { name: "Other", hours: otherHours }];
+    }
+    return { slices, total: known };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [games, usingSteam, steam.genres]);
+  const genresLoading = usingSteam && steam.genresLoading;
 
   const totals = useMemo(() => {
     const totalHours = games.reduce((sum, g) => sum + g.playtimeHours, 0);
@@ -337,6 +372,30 @@ const Stats = () => {
                 </div>
               )}
             </>
+          )}
+        </Card>
+
+        {/* Genre breakdown (by playtime) */}
+        <Card className="bg-gradient-card p-6">
+          <div className="mb-4 flex items-center gap-2">
+            <PieChartIcon className="h-5 w-5 text-primary" />
+            <h3 className="font-semibold text-foreground">Genres by playtime</h3>
+          </div>
+          <GenrePieChart
+            data={genre.slices}
+            total={genre.total}
+            loading={genresLoading}
+            emptyMessage={
+              usingSteam
+                ? "No genre data yet — it's resolved in the background from the Steam store. Try refreshing in a moment."
+                : "Sign in with Steam to see how your playtime splits across genres."
+            }
+          />
+          {genre.total > 0 && (
+            <p className="mt-4 text-xs text-muted-foreground">
+              Share of {Math.round(genre.total).toLocaleString()}h played across your
+              top genres.
+            </p>
           )}
         </Card>
 

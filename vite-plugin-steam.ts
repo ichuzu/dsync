@@ -2,11 +2,17 @@ import type { Plugin, Connect } from "vite";
 import type { ServerResponse } from "node:http";
 import {
   buildLibrary,
+  buildUpcoming,
+  buildWishlistNews,
   fetchCover,
   fetchGameAchievements,
+  fetchLibraryGenres,
+  fetchLibraryNews,
   fetchLibraryStats,
+  fetchNewsItem,
   fetchPresence,
   fetchProfile,
+  fetchWishlist,
   verifySteamLogin,
 } from "./src/lib/steam";
 
@@ -54,7 +60,7 @@ export function steamApi(options: { apiKey?: string }): Plugin {
     res.end(JSON.stringify(body));
   };
 
-  const readJson = (req: Connect.IncomingMessage): Promise<any> =>
+  const readJson = (req: Connect.IncomingMessage): Promise<Record<string, unknown>> =>
     new Promise((resolve) => {
       let data = "";
       req.on("data", (chunk) => (data += chunk));
@@ -129,6 +135,56 @@ export function steamApi(options: { apiKey?: string }): Plugin {
               fetchLibraryStats(steamId, apiKey),
             );
             return send(res, 200, stats);
+          }
+
+          if (route === "genres" && req.method === "GET") {
+            const steamId = url.searchParams.get("steamid");
+            if (!steamId) return send(res, 400, { error: "Missing steamid" });
+            const genres = await cached(`genres:${steamId}`, () =>
+              fetchLibraryGenres(steamId, apiKey),
+            );
+            return send(res, 200, { genres });
+          }
+
+          if (route === "news" && req.method === "GET") {
+            const steamId = url.searchParams.get("steamid");
+            if (!steamId) return send(res, 400, { error: "Missing steamid" });
+            const news = await cached(`news:${steamId}`, () =>
+              fetchLibraryNews(steamId, apiKey),
+            );
+            return send(res, 200, { news });
+          }
+
+          if (route === "wishlist-news" && req.method === "GET") {
+            const steamId = url.searchParams.get("steamid");
+            if (!steamId) return send(res, 400, { error: "Missing steamid" });
+            // Shared, cached enrichment so /upcoming reuses the same fetch.
+            const wishlist = await cached(`wishlist:${steamId}`, () =>
+              fetchWishlist(steamId, apiKey),
+            );
+            const news = await cached(`wishlist-news:${steamId}`, () =>
+              buildWishlistNews(wishlist),
+            );
+            return send(res, 200, { news });
+          }
+
+          if (route === "upcoming" && req.method === "GET") {
+            const steamId = url.searchParams.get("steamid");
+            if (!steamId) return send(res, 400, { error: "Missing steamid" });
+            const wishlist = await cached(`wishlist:${steamId}`, () =>
+              fetchWishlist(steamId, apiKey),
+            );
+            return send(res, 200, { upcoming: buildUpcoming(wishlist) });
+          }
+
+          if (route === "newsitem" && req.method === "GET") {
+            const appid = url.searchParams.get("appid");
+            const gid = url.searchParams.get("gid");
+            if (!appid || !gid) return send(res, 400, { error: "Missing appid or gid" });
+            const item = await cached(`newsitem:${appid}:${gid}`, () =>
+              fetchNewsItem(Number(appid), gid),
+            );
+            return send(res, 200, { item });
           }
 
           if (route === "achievements" && req.method === "GET") {
