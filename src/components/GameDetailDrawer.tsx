@@ -36,6 +36,7 @@ import { Logo } from "@/components/Logo";
 import { useSteam } from "@/hooks/useSteam";
 import { useCollections } from "@/hooks/useCollections";
 import { fetchSteamAchievements } from "@/lib/steamClient";
+import { getImageCandidates } from "@/lib/steamImage";
 import gamePlaceholder from "@/assets/game-placeholder.jpg";
 
 interface GameDetailDrawerProps {
@@ -148,9 +149,8 @@ const GameDetailContent = ({ game, onClose }: { game: Game; onClose: () => void 
     setAddingCol(false);
   };
 
-  const bannerSrc = isSteamApp(game)
-    ? `https://cdn.cloudflare.steamstatic.com/steam/apps/${game.id}/header.jpg`
-    : game.coverImage || gamePlaceholder;
+  const bannerCandidates = isSteamApp(game) ? getImageCandidates(game.id, "landscape") : [];
+  const bannerSrc = bannerCandidates[0] || game.coverImage || gamePlaceholder;
 
   const filtered = (achievements ?? []).filter((a) =>
     filter === "all" ? true : filter === "unlocked" ? a.unlocked : !a.unlocked,
@@ -166,8 +166,12 @@ const GameDetailContent = ({ game, onClose }: { game: Game; onClose: () => void 
           alt={game.title}
           onError={(e) => {
             const img = e.currentTarget as HTMLImageElement;
-            if (!img.dataset.fb) {
-              img.dataset.fb = "1";
+            const next = Number(img.dataset.fb ?? "0") + 1;
+            if (next < bannerCandidates.length) {
+              img.dataset.fb = String(next);
+              img.src = bannerCandidates[next];
+            } else if (img.dataset.fb !== "placeholder") {
+              img.dataset.fb = "placeholder";
               img.src = gamePlaceholder;
             }
           }}

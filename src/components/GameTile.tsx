@@ -1,17 +1,5 @@
-import { useState, type ReactNode } from "react";
-
-const CDN = "https://cdn.cloudflare.steamstatic.com/steam/apps";
-
-/**
- * Steam art lives at several predictable paths and not every app has all of
- * them (e.g. some newly-announced titles lack header.jpg). Try them in order
- * before giving up to a themed gradient.
- */
-const imageCandidates = (appid: number) => [
-  `${CDN}/${appid}/header.jpg`,
-  `${CDN}/${appid}/capsule_616x353.jpg`,
-  `${CDN}/${appid}/library_600x900.jpg`,
-];
+import { type ReactNode } from "react";
+import { SteamImage } from "@/components/SteamImage";
 
 interface GameTileProps {
   appid: number;
@@ -26,23 +14,14 @@ interface GameTileProps {
 
 /** A compact, Reddit-style square tile: game art + a headline overlay. */
 export const GameTile = ({ appid, eyebrow, title, badge, onClick, href }: GameTileProps) => {
-  const [idx, setIdx] = useState(0);
-  const candidates = imageCandidates(appid);
-  const broken = idx >= candidates.length;
-
   const inner = (
     <>
-      {broken ? (
-        <div className="absolute inset-0 bg-gradient-card" />
-      ) : (
-        <img
-          src={candidates[idx]}
-          alt=""
-          loading="lazy"
-          onError={() => setIdx((i) => i + 1)}
-          className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-        />
-      )}
+      <SteamImage
+        appid={appid}
+        shape="landscape"
+        className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+        fallback={<div className="absolute inset-0 bg-gradient-card" />}
+      />
       <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/35 to-transparent" />
       {badge && (
         <span className="absolute right-1.5 top-1.5 rounded bg-black/55 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-white/90">

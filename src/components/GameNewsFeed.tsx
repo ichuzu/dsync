@@ -2,24 +2,14 @@ import { useMemo, useState } from "react";
 import { Check, Loader2, Newspaper, Plus, Search, Settings2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { GameTile } from "@/components/GameTile";
+import { GameNewsCard } from "@/components/GameNewsCard";
 import { NewsArticleDialog } from "@/components/NewsArticleDialog";
+import { groupNewsByGame } from "@/lib/news";
 import { cn } from "@/lib/utils";
 import type { NewsItem } from "@/lib/steam";
 
-const INITIAL = 12;
-
-const relativeTime = (unixSeconds: number): string => {
-  if (!unixSeconds) return "";
-  const mins = Math.round((Date.now() - unixSeconds * 1000) / 60000);
-  if (mins < 1) return "now";
-  if (mins < 60) return `${mins}m`;
-  const hours = Math.round(mins / 60);
-  if (hours < 24) return `${hours}h`;
-  const days = Math.round(hours / 24);
-  if (days < 30) return `${days}d`;
-  return `${Math.round(days / 30)}mo`;
-};
+// Number of game cards to show before the "show more" toggle.
+const INITIAL = 9;
 
 interface Candidate {
   id: string;
@@ -58,7 +48,9 @@ export const GameNewsFeed = ({
     () => (manageable ? news.filter((n) => followed.has(String(n.appid))) : news),
     [news, followed, manageable],
   );
-  const shown = expanded ? feed : feed.slice(0, INITIAL);
+  // Collapse to one card per game so multiple updates don't clutter the feed.
+  const groups = useMemo(() => groupNewsByGame(feed), [feed]);
+  const shown = expanded ? groups : groups.slice(0, INITIAL);
 
   const filteredCandidates = useMemo(() => {
     const term = query.trim().toLowerCase();
@@ -143,9 +135,9 @@ export const GameNewsFeed = ({
       )}
 
       {loading && feed.length === 0 ? (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <div key={i} className="aspect-square animate-pulse rounded-lg bg-muted" />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="aspect-[16/9] animate-pulse rounded-xl bg-muted" />
           ))}
         </div>
       ) : feed.length === 0 ? (
@@ -158,26 +150,23 @@ export const GameNewsFeed = ({
         </p>
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-            {shown.map((item) => (
-              <GameTile
-                key={item.gid}
-                appid={item.appid}
-                eyebrow={item.game}
-                title={item.title}
-                badge={item.date > 0 ? relativeTime(item.date) : undefined}
-                onClick={() => setSelected(item)}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {shown.map((group) => (
+              <GameNewsCard
+                key={group.appid}
+                group={group}
+                onOpenItem={setSelected}
               />
             ))}
           </div>
 
-          {feed.length > INITIAL && (
+          {groups.length > INITIAL && (
             <button
               type="button"
               onClick={() => setExpanded((v) => !v)}
               className="mt-4 text-sm font-medium text-primary hover:underline"
             >
-              {expanded ? "Show less" : `Show ${feed.length - INITIAL} more`}
+              {expanded ? "Show less" : `Show ${groups.length - INITIAL} more`}
             </button>
           )}
         </>

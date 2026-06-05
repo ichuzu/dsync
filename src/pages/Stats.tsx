@@ -1,8 +1,6 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { Link } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import {
-  ArrowLeft,
   Clock,
   CalendarClock,
   Gauge,
@@ -25,8 +23,11 @@ import {
   isPerfectGame,
 } from "@/types/game";
 import { useSteam } from "@/hooks/useSteam";
+import { AppNav } from "@/components/AppNav";
+import { AchievementStats } from "@/components/AchievementStats";
 import { ContributionHeatmap } from "@/components/ContributionHeatmap";
 import { GenrePieChart, type GenreSlice } from "@/components/GenrePieChart";
+import type { RarityBreakdown } from "@/types/game";
 import { cn } from "@/lib/utils";
 
 // Slices past this many genres are folded into a single "Other" wedge.
@@ -128,6 +129,22 @@ const Stats = () => {
   const startedLoading = usingSteam && steam.statsLoading && !steam.libraryStats;
   const achHint = refining ? "refining…" : undefined;
 
+  // Unlocked achievements by global rarity, aggregated across the library.
+  const rarityBreakdown = useMemo<RarityBreakdown>(
+    () =>
+      games.reduce<RarityBreakdown>(
+        (acc, g) => ({
+          common: acc.common + g.rarityBreakdown.common,
+          uncommon: acc.uncommon + g.rarityBreakdown.uncommon,
+          rare: acc.rare + g.rarityBreakdown.rare,
+          epic: acc.epic + g.rarityBreakdown.epic,
+          legendary: acc.legendary + g.rarityBreakdown.legendary,
+        }),
+        { common: 0, uncommon: 0, rare: 0, epic: 0, legendary: 0 },
+      ),
+    [games],
+  );
+
   // ---- Achievement activity heatmap ----
   const activity = useMemo(
     () => (usingSteam ? steam.libraryStats?.activity ?? [] : []),
@@ -177,25 +194,17 @@ const Stats = () => {
 
   return (
     <div className="min-h-screen">
-      <nav className="sticky top-0 z-30 border-b border-border bg-background/70 backdrop-blur-md">
-        <div className="container mx-auto flex items-center gap-3 px-4 py-3">
-          <Link
-            to="/"
-            className="flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Library
-          </Link>
-          <span className="text-lg font-bold tracking-tight text-foreground">Statistics</span>
+      <AppNav />
+
+      <div className="container mx-auto space-y-6 px-4 py-6">
+        <header className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">Statistics</h1>
           {refining && (
             <span className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
               <Loader2 className="h-3 w-3 animate-spin" /> computing full library…
             </span>
           )}
-        </div>
-      </nav>
-
-      <div className="container mx-auto space-y-6 px-4 py-6">
+        </header>
         {/* Headline numbers */}
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <Stat icon={<Library className="h-4 w-4" />} label="Games owned" value={totals.totalGames.toLocaleString()} />
@@ -297,7 +306,22 @@ const Stats = () => {
               />
 
               {/* Month bars (click to inspect a month) */}
-              <div className="mt-5 grid grid-cols-12 gap-1">
+              <div className="group/bars relative mt-5">
+                {/* Thin guide lines at quartiles of the month max, so bar
+                    heights are easy to compare across the year. Revealed on
+                    hover (named group so the per-bar hover-lighten is separate).
+                    Aligned to the h-16 plot area and bottom-anchored to the bars. */}
+                <div className="pointer-events-none absolute inset-x-0 top-0 h-16 opacity-0 transition-opacity duration-200 group-hover/bars:opacity-100">
+                  {[25, 50, 75, 100].map((pct) => (
+                    <div
+                      key={pct}
+                      className="absolute inset-x-0 h-px bg-foreground/10"
+                      style={{ bottom: `${pct}%` }}
+                    />
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-12 gap-1">
                 {monthly.map((v, i) => {
                   const key = `${activeYear}-${String(i + 1).padStart(2, "0")}`;
                   const active = selected?.kind === "month" && selected.key === key;
@@ -329,6 +353,7 @@ const Stats = () => {
                     </button>
                   );
                 })}
+                </div>
               </div>
 
               {/* Detail for the selected day / month */}
@@ -398,6 +423,9 @@ const Stats = () => {
             </p>
           )}
         </Card>
+
+        {/* Achievements by rarity */}
+        <AchievementStats breakdown={rarityBreakdown} />
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           {/* Most played */}

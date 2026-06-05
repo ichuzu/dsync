@@ -5,6 +5,7 @@ import { Clock, Sparkles, ChevronRight } from "lucide-react";
 import { Game, completionPercentage, isPerfectGame } from "@/types/game";
 import { LAUNCHERS } from "@/lib/launchers";
 import { Logo } from "@/components/Logo";
+import { getImageCandidates } from "@/lib/steamImage";
 import gamePlaceholder from "@/assets/game-placeholder.jpg";
 
 const GOLD = "hsl(41, 92%, 56%)";
@@ -20,6 +21,10 @@ export const GameListItem = ({ game, onClick, live }: GameListItemProps) => {
   const perfect = isPerfectGame(game);
   const playing = Boolean(live);
   const launcher = LAUNCHERS[game.launcher];
+
+  // Portrait thumbnail with a CDN-variant fallback walk before the placeholder.
+  const artCandidates = getImageCandidates(game.id, "portrait");
+  const initialSrc = artCandidates[0] || game.coverImage || gamePlaceholder;
 
   return (
     <Box
@@ -43,13 +48,17 @@ export const GameListItem = ({ game, onClick, live }: GameListItemProps) => {
     >
       <Box
         component="img"
-        src={game.coverImage || gamePlaceholder}
+        src={initialSrc}
         alt={game.title}
         loading="lazy"
         onError={(e) => {
           const img = e.currentTarget as HTMLImageElement;
-          if (!img.dataset.fb) {
-            img.dataset.fb = "1";
+          const next = Number(img.dataset.fb ?? "0") + 1;
+          if (next < artCandidates.length) {
+            img.dataset.fb = String(next);
+            img.src = artCandidates[next];
+          } else if (img.dataset.fb !== "placeholder") {
+            img.dataset.fb = "placeholder";
             img.src = gamePlaceholder;
           }
         }}

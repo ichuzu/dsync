@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -410,7 +411,12 @@ export const SteamProvider = ({ children }: { children: ReactNode }) => {
     if (cache) {
       setLibraryStats(cache.stats);
       // Refetch if fresh-but-missing newer fields (cache migration).
-      if (cache.stats.started && cache.stats.activity && Date.now() - cache.ts < LIBRARY_TTL_MS)
+      if (
+        cache.stats.started &&
+        cache.stats.activity &&
+        cache.stats.perGame &&
+        Date.now() - cache.ts < LIBRARY_TTL_MS
+      )
         return;
     }
     loadStats(steamId);
@@ -542,10 +548,27 @@ export const SteamProvider = ({ children }: { children: ReactNode }) => {
     library.length,
   ]);
 
+  // buildLibrary only enriches the top games by playtime with achievement
+  // counts; the rest arrive as 0/0. The full-library stats sweep already has
+  // accurate earned/total for every game, so fold those in (without an extra
+  // API call) so every card shows real progress. Only fill gaps — keep the
+  // richer top-game data (which also carries the rarity breakdown).
+  const mergedLibrary = useMemo(() => {
+    const perGame = libraryStats?.perGame;
+    if (!perGame) return library;
+    return library.map((g) => {
+      const s = perGame[g.id];
+      if (s && s.total > 0 && g.totalAchievements === 0) {
+        return { ...g, earnedAchievements: s.earned, totalAchievements: s.total };
+      }
+      return g;
+    });
+  }, [library, libraryStats]);
+
   const value: SteamContextValue = {
     connected: Boolean(session),
     profile: session?.profile ?? null,
-    library,
+    library: mergedLibrary,
     libraryStats,
     statsLoading,
     genres,

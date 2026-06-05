@@ -9,6 +9,7 @@ import { Game, RarityBreakdown, completionPercentage, isPerfectGame } from "@/ty
 import { LAUNCHERS } from "@/lib/launchers";
 import { Logo } from "@/components/Logo";
 import { fetchSteamCover } from "@/lib/steamClient";
+import { getImageCandidates } from "@/lib/steamImage";
 import gamePlaceholder from "@/assets/game-placeholder.jpg";
 
 interface GameCardProps {
@@ -25,6 +26,11 @@ export const GameCard = ({ game, onClick, live }: GameCardProps) => {
   const perfect = isPerfectGame(game);
   const playing = Boolean(live);
   const launcher = LAUNCHERS[game.launcher];
+
+  // Landscape art (header.jpg first) with a resilient fallback chain: walk the
+  // CDN variants, then the server store lookup, then the local placeholder.
+  const artCandidates = getImageCandidates(game.id, "landscape");
+  const initialSrc = artCandidates[0] || game.coverImage || gamePlaceholder;
 
   return (
     <Card
@@ -57,23 +63,22 @@ export const GameCard = ({ game, onClick, live }: GameCardProps) => {
         }}
       >
         {/* Cover */}
-        <Box sx={{ position: "relative", width: "100%", aspectRatio: "3 / 4", overflow: "hidden" }}>
+        <Box sx={{ position: "relative", width: "100%", aspectRatio: "16 / 9", overflow: "hidden" }}>
           <Box
             component="img"
-            src={game.coverImage || gamePlaceholder}
+            src={initialSrc}
             alt={game.title}
             className="cover-img"
             loading="lazy"
             onError={(e) => {
-              // Portrait cover → landscape header → store API (hashed asset,
-              // for unreleased games) → local placeholder.
+              // Walk the CDN art variants, then the server store lookup (hashed
+              // assets for unreleased games), then the local placeholder.
               const img = e.currentTarget as HTMLImageElement;
-              const stage = img.dataset.fb;
-              const numeric = /^\d+$/.test(game.id);
-              if (!stage && numeric) {
-                img.dataset.fb = "header";
-                img.src = `https://cdn.cloudflare.steamstatic.com/steam/apps/${game.id}/header.jpg`;
-              } else if (stage === "header" && numeric) {
+              const next = Number(img.dataset.fb ?? "0") + 1;
+              if (next < artCandidates.length) {
+                img.dataset.fb = String(next);
+                img.src = artCandidates[next];
+              } else if (img.dataset.fb !== "store" && img.dataset.fb !== "placeholder") {
                 img.dataset.fb = "store";
                 fetchSteamCover(game.id)
                   .then((url) => {
@@ -82,7 +87,7 @@ export const GameCard = ({ game, onClick, live }: GameCardProps) => {
                   .catch(() => {
                     img.src = gamePlaceholder;
                   });
-              } else if (stage !== "placeholder") {
+              } else if (img.dataset.fb !== "placeholder") {
                 img.dataset.fb = "placeholder";
                 img.src = gamePlaceholder;
               }

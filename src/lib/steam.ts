@@ -404,6 +404,9 @@ export interface LibraryStats {
   perfectGames: number;
   /** Mean of per-game completion percentages (0–100). */
   avgCompletion: number;
+  /** appid → unlocked/total counts, for every game with achievements. Lets the
+      library cards show accurate progress without a separate per-game fetch. */
+  perGame: Record<string, { earned: number; total: number }>;
   /** appid → earliest achievement-unlock date (YYYY-MM-DD) ≈ when you started. */
   started: Record<string, string>;
   /** Per-day, per-game achievement-unlock counts (for the activity heatmap). */
@@ -485,7 +488,9 @@ export async function fetchLibraryStats(
 
   const started: Record<string, string> = {};
   const activity: Array<{ d: string; appid: string; n: number }> = [];
+  const perGameCounts: Record<string, { earned: number; total: number }> = {};
   for (const x of valid) {
+    perGameCounts[String(x.appid)] = { earned: x.earned, total: x.total };
     if (x.startedUnix) started[String(x.appid)] = toIsoDate(x.startedUnix) as string;
     for (const [d, n] of Object.entries(x.days)) {
       activity.push({ d, appid: String(x.appid), n });
@@ -499,6 +504,7 @@ export async function fetchLibraryStats(
     totalAchievements,
     perfectGames,
     avgCompletion,
+    perGame: perGameCounts,
     started,
     activity,
   };

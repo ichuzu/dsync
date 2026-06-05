@@ -1,14 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Link } from "react-router-dom";
 import { GameCard } from "@/components/GameCard";
 import { GameListItem } from "@/components/GameListItem";
 import { GameDetailDrawer } from "@/components/GameDetailDrawer";
-import { AchievementStats } from "@/components/AchievementStats";
-import { GameNewsFeed } from "@/components/GameNewsFeed";
-import { UpcomingGames } from "@/components/UpcomingGames";
-import { CollectionsPanel } from "@/components/CollectionsPanel";
-import { AuthButton } from "@/components/AuthButton";
-import { UserProfile } from "@/components/UserProfile";
+import { AppNav } from "@/components/AppNav";
 import Box from "@mui/material/Box";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,47 +19,28 @@ import {
   Library,
   Award,
   TrendingUp,
-  Gamepad2,
   Lock,
   RefreshCw,
   Sparkles,
   LayoutGrid,
   List as ListIcon,
-  BarChart3,
 } from "lucide-react";
 import { mockGames } from "@/data/mockGames";
 import {
   Game,
-  RarityBreakdown,
   completionPercentage,
   isCurrentlyPlaying,
   isPerfectGame,
 } from "@/types/game";
 import { useSteam } from "@/hooks/useSteam";
 import { useCollections } from "@/hooks/useCollections";
-import { useFollowedGames } from "@/hooks/useFollowedGames";
 import { cn } from "@/lib/utils";
-
-// How many recently-played games to follow by default (until the user picks).
-const DEFAULT_FOLLOW_COUNT = 8;
-
-// Stable empties for the non-manageable wishlist-news feed.
-const EMPTY_SET: Set<string> = new Set();
-const NOOP = () => {};
 
 type StatusFilter = "all" | "playing" | "perfect" | "in-progress" | "unsynced";
 type SortKey = "recent" | "completion" | "playtime" | "title";
 type ViewMode = "grid" | "list";
 
 const PAGE_SIZE = 36;
-
-const EMPTY_BREAKDOWN: RarityBreakdown = {
-  common: 0,
-  uncommon: 0,
-  rare: 0,
-  epic: 0,
-  legendary: 0,
-};
 
 const Index = () => {
   const steam = useSteam();
@@ -76,7 +51,6 @@ const Index = () => {
   const games: Game[] = usingSteam ? steam.library : mockGames;
 
   const { collections } = useCollections();
-  const { followed: customFollowed, setFollowed } = useFollowedGames();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [collectionFilter, setCollectionFilter] = useState("all");
@@ -92,16 +66,6 @@ const Index = () => {
     // achievement stats (for a Steam library that's the synced subset).
     const withAch = games.filter((g) => g.totalAchievements > 0);
     const earned = games.reduce((sum, g) => sum + g.earnedAchievements, 0);
-    const breakdown = games.reduce<RarityBreakdown>(
-      (acc, g) => ({
-        common: acc.common + g.rarityBreakdown.common,
-        uncommon: acc.uncommon + g.rarityBreakdown.uncommon,
-        rare: acc.rare + g.rarityBreakdown.rare,
-        epic: acc.epic + g.rarityBreakdown.epic,
-        legendary: acc.legendary + g.rarityBreakdown.legendary,
-      }),
-      { ...EMPTY_BREAKDOWN },
-    );
     // Average of each game's completion percentage (not a weighted aggregate),
     // across only the games that have achievements.
     const avgCompletion =
@@ -110,7 +74,6 @@ const Index = () => {
         : withAch.reduce((sum, g) => sum + completionPercentage(g), 0) / withAch.length;
     return {
       earned,
-      breakdown,
       perfectGames: games.filter(isPerfectGame).length,
       avgCompletion,
       gamesWithAch: withAch.length,
@@ -127,37 +90,11 @@ const Index = () => {
     avg: accurate ? accurate.avgCompletion : stats.avgCompletion,
     withAch: accurate ? accurate.gamesWithAchievements : stats.gamesWithAch,
   };
-  const kpiHint = (over: number): string | undefined => {
-    if (statsRefining) return "refining…";
-    if (usingSteam && accurate) return `from ${over.toLocaleString()} games`;
-    if (over > 0) return `across ${over.toLocaleString()} games`;
-    return undefined;
-  };
 
   const nowPlaying = steam.presence?.inGame ? steam.presence : null;
   const nowPlayingGame = nowPlaying?.gameId
     ? games.find((g) => g.id === nowPlaying.gameId) ?? null
     : null;
-
-  // Default subscriptions: the games you've played most recently. Once you
-  // customize the list it sticks; until then we follow these automatically.
-  const recentDefault = useMemo(() => {
-    const recent = games
-      .filter((g) => (g.recentPlaytimeHours ?? 0) > 0)
-      .sort((a, b) => (b.recentPlaytimeHours ?? 0) - (a.recentPlaytimeHours ?? 0));
-    const base = recent.length
-      ? recent
-      : [...games].sort((a, b) => b.playtimeHours - a.playtimeHours);
-    return base.slice(0, DEFAULT_FOLLOW_COUNT).map((g) => g.id);
-  }, [games]);
-
-  const effectiveFollowed = customFollowed ?? recentDefault;
-  const followedSet = useMemo(() => new Set(effectiveFollowed), [effectiveFollowed]);
-
-  const toggleFollow = (id: string) => {
-    const base = customFollowed ?? recentDefault;
-    setFollowed(base.includes(id) ? base.filter((x) => x !== id) : [...base, id]);
-  };
 
   const visibleGames = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -217,27 +154,7 @@ const Index = () => {
 
   return (
     <div className="min-h-screen">
-      {/* Navbar */}
-      <nav className="sticky top-0 z-30 border-b border-border bg-background/70 backdrop-blur-md">
-        <div className="container mx-auto flex items-center justify-between px-4 py-3">
-          <Link to="/" className="flex items-center gap-2">
-            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-brand text-primary-foreground">
-              <Gamepad2 className="h-5 w-5" />
-            </span>
-            <span className="text-lg font-bold tracking-tight text-foreground">Dsync</span>
-          </Link>
-          <div className="flex items-center gap-4">
-            <Link
-              to="/stats"
-              className="flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <BarChart3 className="h-4 w-4" />
-              <span className="hidden sm:inline">Stats</span>
-            </Link>
-            <AuthButton />
-          </div>
-        </div>
-      </nav>
+      <AppNav />
 
       <div className="container mx-auto space-y-6 px-4 py-6">
         {/* Live now-playing */}
@@ -266,225 +183,195 @@ const Index = () => {
           </button>
         )}
 
-        {/* News from your games (gamehub feed) — full-width tile strip */}
-        <GameNewsFeed
-          news={usingSteam ? steam.news : []}
-          followed={followedSet}
-          candidates={games.map((g) => ({ id: g.id, title: g.title }))}
-          onToggleFollow={toggleFollow}
-          manageable={usingSteam}
-          loading={usingSteam && steam.newsLoading}
-          emptyMessage="Sign in with Steam to follow your games and see the latest news, updates, and patch notes."
+        {/* Slim hero stat bar */}
+        <StatBar
+          items={[
+            { icon: <Library className="h-4 w-4" />, label: "Games", value: games.length.toLocaleString() },
+            {
+              icon: <Award className="h-4 w-4" />,
+              label: "Achievements",
+              value: kpi.unlocked.toLocaleString(),
+            },
+            {
+              icon: <Sparkles className="h-4 w-4 text-rarity-legendary" />,
+              label: "Perfect",
+              value: kpi.perfect.toLocaleString(),
+            },
+            {
+              icon: <TrendingUp className="h-4 w-4 text-success" />,
+              label: "Avg completion",
+              value: `${kpi.avg.toFixed(0)}%`,
+            },
+          ]}
+          hint={statsRefining ? "refining…" : undefined}
         />
 
-        {/* Wishlist news + upcoming releases — only meaningful once signed in */}
-        {usingSteam && (
-          <>
-            <GameNewsFeed
-              title="News from your wishlist"
-              news={steam.wishlistNews}
-              followed={EMPTY_SET}
-              candidates={[]}
-              onToggleFollow={NOOP}
-              manageable={false}
-              loading={steam.wishlistNewsLoading}
-              emptyMessage="No recent news from your wishlist. (Your Steam wishlist must be public.)"
-            />
-            <UpcomingGames
-              games={steam.upcoming}
-              loading={steam.upcomingLoading}
-              emptyMessage="No upcoming releases on your wishlist. (Your Steam wishlist must be public.)"
-            />
-          </>
-        )}
-
-        {/* Summary KPIs */}
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <Kpi icon={<Library className="h-4 w-4" />} label="Games" value={games.length.toLocaleString()} />
-          <Kpi
-            icon={<Award className="h-4 w-4" />}
-            label="Achievements"
-            value={kpi.unlocked.toLocaleString()}
-            hint={kpiHint(kpi.withAch)}
-          />
-          <Kpi
-            icon={<Sparkles className="h-4 w-4 text-rarity-legendary" />}
-            label="Perfect games"
-            value={kpi.perfect.toLocaleString()}
-            hint={statsRefining ? "refining…" : undefined}
-          />
-          <Kpi
-            icon={<TrendingUp className="h-4 w-4 text-success" />}
-            label="Avg completion"
-            value={`${kpi.avg.toFixed(0)}%`}
-            hint={kpiHint(kpi.withAch)}
-          />
-        </div>
-
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
-          {/* Sidebar */}
-          <aside className="space-y-4 lg:col-span-1">
-            <UserProfile
-              gameCount={games.length}
-              achievementCount={kpi.unlocked}
-              perfectGames={kpi.perfect}
-            />
-            <CollectionsPanel selected={collectionFilter} onSelect={setCollectionFilter} />
-            <AchievementStats breakdown={stats.breakdown} />
-          </aside>
-
-          {/* Main */}
-          <main className="space-y-4 lg:col-span-3">
-            {/* Toolbar */}
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  placeholder="Search games or genres…"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="pl-10"
-                />
-              </div>
-              <Select value={sort} onValueChange={(v) => setSort(v as SortKey)}>
-                <SelectTrigger className="w-full sm:w-44">
-                  <SelectValue placeholder="Sort by" />
+        {/* Library */}
+        <main className="space-y-4">
+          {/* Toolbar */}
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="Search games or genres…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="pl-10"
+              />
+            </div>
+            {collections.length > 0 && (
+              <Select value={collectionFilter} onValueChange={setCollectionFilter}>
+                <SelectTrigger className="w-full lg:w-44">
+                  <SelectValue placeholder="Collection" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="recent">Recently played</SelectItem>
-                  <SelectItem value="completion">Completion</SelectItem>
-                  <SelectItem value="playtime">Playtime</SelectItem>
-                  <SelectItem value="title">Title (A–Z)</SelectItem>
+                  <SelectItem value="all">All collections</SelectItem>
+                  {collections.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
-              <div className="flex shrink-0 rounded-md border border-border p-0.5">
-                <ViewButton active={view === "grid"} onClick={() => setView("grid")} label="Grid view">
-                  <LayoutGrid className="h-4 w-4" />
-                </ViewButton>
-                <ViewButton active={view === "list"} onClick={() => setView("list")} label="List view">
-                  <ListIcon className="h-4 w-4" />
-                </ViewButton>
-              </div>
-            </div>
-
-            {/* Filter chips */}
-            <div className="flex flex-wrap items-center gap-2">
-              {statusChips.map((chip) => (
-                <FilterChip
-                  key={chip.key}
-                  active={statusFilter === chip.key}
-                  onClick={() => setStatusFilter(chip.key)}
-                >
-                  {chip.label}
-                </FilterChip>
-              ))}
-            </div>
-
-            {/* Status row: count + data source */}
-            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-              <span>
-                {libraryLoading
-                  ? "Loading your library…"
-                  : `${visibleGames.length.toLocaleString()} ${
-                      visibleGames.length === 1 ? "game" : "games"
-                    }`}
-              </span>
-              {!usingSteam ? (
-                <span>Demo library — sign in with Steam to load yours.</span>
-              ) : steam.lastSynced ? (
-                <button
-                  type="button"
-                  onClick={steam.refresh}
-                  disabled={steam.refreshing}
-                  className="inline-flex items-center gap-1 text-primary hover:underline disabled:opacity-60"
-                >
-                  <RefreshCw className={cn("h-3 w-3", steam.refreshing && "animate-spin")} />
-                  {steam.refreshing ? "Syncing…" : `Synced ${relativeTime(steam.lastSynced)} · Refresh`}
-                </button>
-              ) : null}
-            </div>
-            {steam.status === "error" && (
-              <p className="text-xs text-destructive">
-                Couldn't load your Steam library: {steam.error}
-              </p>
             )}
+            <Select value={sort} onValueChange={(v) => setSort(v as SortKey)}>
+              <SelectTrigger className="w-full lg:w-44">
+                <SelectValue placeholder="Sort by" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="recent">Recently played</SelectItem>
+                <SelectItem value="completion">Completion</SelectItem>
+                <SelectItem value="playtime">Playtime</SelectItem>
+                <SelectItem value="title">Title (A–Z)</SelectItem>
+              </SelectContent>
+            </Select>
+            <div className="flex shrink-0 rounded-md border border-border p-0.5">
+              <ViewButton active={view === "grid"} onClick={() => setView("grid")} label="Grid view">
+                <LayoutGrid className="h-4 w-4" />
+              </ViewButton>
+              <ViewButton active={view === "list"} onClick={() => setView("list")} label="List view">
+                <ListIcon className="h-4 w-4" />
+              </ViewButton>
+            </div>
+          </div>
 
-            {/* Content */}
-            {libraryLoading ? (
-              <LoadingGrid />
-            ) : visibleGames.length === 0 ? (
-              usingSteam && steam.library.length === 0 ? (
-                <EmptyState
-                  icon={<Lock className="h-7 w-7 text-warning" />}
-                  iconClass="bg-warning/15"
-                  title="Your Steam library came back empty"
-                  description="Steam only shares your games when your profile is public. Open Edit Profile → Privacy Settings and set Game details (and your profile) to Public, then refresh."
-                  actions={
-                    <>
-                      <Button asChild size="sm">
-                        <a href="https://steamcommunity.com/my/edit/settings" target="_blank" rel="noreferrer">
-                          Open Steam privacy settings
-                        </a>
-                      </Button>
-                      <Button variant="outline" size="sm" onClick={steam.refresh}>
-                        Refresh
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={steam.signOut}>
-                        Use demo library
-                      </Button>
-                    </>
-                  }
-                />
-              ) : (
-                <EmptyState
-                  icon={<Search className="h-7 w-7 text-muted-foreground" />}
-                  iconClass="bg-muted"
-                  title="No games found"
-                  description="Try a different search or clear your filters."
-                  actions={
-                    <Button variant="outline" size="sm" onClick={clearFilters}>
-                      Clear filters
+          {/* Filter chips */}
+          <div className="flex flex-wrap items-center gap-2">
+            {statusChips.map((chip) => (
+              <FilterChip
+                key={chip.key}
+                active={statusFilter === chip.key}
+                onClick={() => setStatusFilter(chip.key)}
+              >
+                {chip.label}
+              </FilterChip>
+            ))}
+          </div>
+
+          {/* Status row: count + data source */}
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span>
+              {libraryLoading
+                ? "Loading your library…"
+                : `${visibleGames.length.toLocaleString()} ${
+                    visibleGames.length === 1 ? "game" : "games"
+                  }`}
+            </span>
+            {!usingSteam ? (
+              <span>Demo library — sign in with Steam to load yours.</span>
+            ) : steam.lastSynced ? (
+              <button
+                type="button"
+                onClick={steam.refresh}
+                disabled={steam.refreshing}
+                className="inline-flex items-center gap-1 text-primary hover:underline disabled:opacity-60"
+              >
+                <RefreshCw className={cn("h-3 w-3", steam.refreshing && "animate-spin")} />
+                {steam.refreshing ? "Syncing…" : `Synced ${relativeTime(steam.lastSynced)} · Refresh`}
+              </button>
+            ) : null}
+          </div>
+          {steam.status === "error" && (
+            <p className="text-xs text-destructive">
+              Couldn't load your Steam library: {steam.error}
+            </p>
+          )}
+
+          {/* Content */}
+          {libraryLoading ? (
+            <LoadingGrid />
+          ) : visibleGames.length === 0 ? (
+            usingSteam && steam.library.length === 0 ? (
+              <EmptyState
+                icon={<Lock className="h-7 w-7 text-warning" />}
+                iconClass="bg-warning/15"
+                title="Your Steam library came back empty"
+                description="Steam only shares your games when your profile is public. Open Edit Profile → Privacy Settings and set Game details (and your profile) to Public, then refresh."
+                actions={
+                  <>
+                    <Button asChild size="sm">
+                      <a href="https://steamcommunity.com/my/edit/settings" target="_blank" rel="noreferrer">
+                        Open Steam privacy settings
+                      </a>
                     </Button>
-                  }
-                />
-              )
-            ) : view === "grid" ? (
-              <>
-                <Box
-                  sx={{
-                    display: "grid",
-                    gap: 2.5,
-                    gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))",
-                  }}
-                >
-                  {shown.map((game) => (
-                    <GameCard
-                      key={game.id}
-                      game={game}
-                      live={!!nowPlaying && game.id === nowPlaying.gameId}
-                      onClick={() => setSelectedGame(game)}
-                    />
-                  ))}
-                </Box>
-                {hasMore && <LoadMore shown={shown.length} total={visibleGames.length} onClick={() => setPage((p) => p + 1)} />}
-              </>
+                    <Button variant="outline" size="sm" onClick={steam.refresh}>
+                      Refresh
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={steam.signOut}>
+                      Use demo library
+                    </Button>
+                  </>
+                }
+              />
             ) : (
-              <>
-                <div className="flex flex-col gap-2">
-                  {shown.map((game) => (
-                    <GameListItem
-                      key={game.id}
-                      game={game}
-                      live={!!nowPlaying && game.id === nowPlaying.gameId}
-                      onClick={() => setSelectedGame(game)}
-                    />
-                  ))}
-                </div>
-                {hasMore && <LoadMore shown={shown.length} total={visibleGames.length} onClick={() => setPage((p) => p + 1)} />}
-              </>
-            )}
-          </main>
-        </div>
+              <EmptyState
+                icon={<Search className="h-7 w-7 text-muted-foreground" />}
+                iconClass="bg-muted"
+                title="No games found"
+                description="Try a different search or clear your filters."
+                actions={
+                  <Button variant="outline" size="sm" onClick={clearFilters}>
+                    Clear filters
+                  </Button>
+                }
+              />
+            )
+          ) : view === "grid" ? (
+            <>
+              <Box
+                sx={{
+                  display: "grid",
+                  gap: 2.5,
+                  gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
+                }}
+              >
+                {shown.map((game) => (
+                  <GameCard
+                    key={game.id}
+                    game={game}
+                    live={!!nowPlaying && game.id === nowPlaying.gameId}
+                    onClick={() => setSelectedGame(game)}
+                  />
+                ))}
+              </Box>
+              {hasMore && <LoadMore shown={shown.length} total={visibleGames.length} onClick={() => setPage((p) => p + 1)} />}
+            </>
+          ) : (
+            <>
+              <div className="flex flex-col gap-2">
+                {shown.map((game) => (
+                  <GameListItem
+                    key={game.id}
+                    game={game}
+                    live={!!nowPlaying && game.id === nowPlaying.gameId}
+                    onClick={() => setSelectedGame(game)}
+                  />
+                ))}
+              </div>
+              {hasMore && <LoadMore shown={shown.length} total={visibleGames.length} onClick={() => setPage((p) => p + 1)} />}
+            </>
+          )}
+        </main>
       </div>
 
       <GameDetailDrawer
@@ -505,24 +392,22 @@ const relativeTime = (ts: number): string => {
   return `${Math.round(hours / 24)}d ago`;
 };
 
-const Kpi = ({
-  icon,
-  label,
-  value,
+const StatBar = ({
+  items,
   hint,
 }: {
-  icon: ReactNode;
-  label: string;
-  value: string;
+  items: Array<{ icon: ReactNode; label: string; value: string }>;
   hint?: string;
 }) => (
-  <div className="rounded-xl border border-border bg-gradient-card p-4">
-    <div className="mb-1 flex items-center gap-2 text-muted-foreground">
-      <span className="text-primary">{icon}</span>
-      <span className="text-xs">{label}</span>
-    </div>
-    <div className="text-2xl font-bold tabular-nums text-foreground">{value}</div>
-    {hint && <div className="mt-0.5 text-[11px] text-muted-foreground">{hint}</div>}
+  <div className="flex flex-wrap items-center gap-x-8 gap-y-3 rounded-xl border border-border bg-gradient-hero px-5 py-4">
+    {items.map((item) => (
+      <div key={item.label} className="flex items-center gap-2.5">
+        <span className="text-primary">{item.icon}</span>
+        <span className="text-xl font-bold tabular-nums text-foreground">{item.value}</span>
+        <span className="text-xs text-muted-foreground">{item.label}</span>
+      </div>
+    ))}
+    {hint && <span className="ml-auto text-[11px] text-muted-foreground">{hint}</span>}
   </div>
 );
 
@@ -567,12 +452,12 @@ const LoadingGrid = () => (
     sx={{
       display: "grid",
       gap: 2.5,
-      gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))",
+      gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
     }}
   >
     {Array.from({ length: 6 }).map((_, i) => (
       <div key={i} className="overflow-hidden rounded-xl border border-border">
-        <Skeleton className="aspect-[3/4] w-full rounded-none" />
+        <Skeleton className="aspect-[16/9] w-full rounded-none" />
         <div className="space-y-2 p-4">
           <Skeleton className="h-3 w-2/3" />
           <Skeleton className="h-2 w-full" />
