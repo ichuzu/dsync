@@ -25,6 +25,12 @@ export interface ThemeConfig {
   /** Hue and saturation of the neutral surfaces — how "tinted" the greys are. */
   neutralHue: number;
   neutralSat: number;
+  /**
+   * Secondary surfaces (secondary buttons, chips). Unset, they are a muted
+   * shade of the primary; set, they use their own hue and intensity.
+   */
+  secondaryHue?: number;
+  secondarySat?: number;
   /** Corner radius in rem. */
   radius: number;
   /**
@@ -83,6 +89,13 @@ const round = (n: number) => Math.round(n * 10) / 10;
 /** The CSS custom properties, without the leading `--`, mapped to their values. */
 export type TokenMap = Record<string, string>;
 
+/** The secondary colour actually in use: its own if set, else derived from the primary. */
+export const resolvedSecondary = (c: ThemeConfig, mode: ResolvedMode): { hue: number; sat: number } => {
+  const ns = mode === "light" ? Math.min(c.neutralSat, 30) : c.neutralSat;
+  const derived = mode === "light" ? clamp(round(ns * 1.1), 10, 24) : clamp(round(ns * 0.6), 8, 18);
+  return { hue: c.secondaryHue ?? c.primaryHue, sat: c.secondarySat ?? derived };
+};
+
 const darkTokens = (c: ThemeConfig): TokenMap => {
   const nh = c.neutralHue;
   const ns = c.neutralSat;
@@ -107,7 +120,7 @@ const darkTokens = (c: ThemeConfig): TokenMap => {
     // Secondary is a raised surface, so it takes a hint of the primary hue and
     // a floor on saturation — a purely neutral derivation goes invisible against
     // the card on the barely-tinted palettes.
-    secondary: `${ph} ${clamp(round(ns * 0.6), 8, 18)}% 22%`,
+    secondary: `${resolvedSecondary(c, "dark").hue} ${resolvedSecondary(c, "dark").sat}% 22%`,
     "secondary-foreground": `${nh} ${Math.min(ns, 20)}% 96%`,
 
     muted: `${nh} ${round(ns * 0.7)}% 15%`,
@@ -170,7 +183,7 @@ const lightTokens = (c: ThemeConfig): TokenMap => {
     "primary-glow": `${clampHue(ph - 4)} ${Math.min(ps + 4, 100)}% 52%`,
 
     // See the dark note: tinted toward the primary so it reads as a surface.
-    secondary: `${ph} ${clamp(round(ns * 1.1), 10, 24)}% 90%`,
+    secondary: `${resolvedSecondary(c, "light").hue} ${resolvedSecondary(c, "light").sat}% 90%`,
     "secondary-foreground": `${nh} ${Math.min(ns + 10, 40)}% 14%`,
 
     muted: `${nh} ${round(ns * 1.1)}% 94%`,

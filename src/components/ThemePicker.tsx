@@ -13,6 +13,7 @@ import {
   type Palette as PaletteDef,
 } from "@/theme/palettes";
 import { useTheme } from "@/theme/ThemeProvider";
+import { resolvedSecondary } from "@/theme/tokens";
 import type { ThemeMode } from "@/theme/tokens";
 import { cn } from "@/lib/utils";
 import { useSteam } from "@/hooks/useSteam";
@@ -29,6 +30,65 @@ const MODES: Array<{ value: ThemeMode; label: string; icon: typeof Sun }> = [
  * A slider whose track shows the range it controls, so the user can aim at a
  * colour instead of hunting for a number.
  */
+type ColourRole = "primary" | "secondary" | "accent";
+
+const COLOUR_ROLES: Array<{ role: ColourRole; label: string; className: string }> = [
+  { role: "primary", label: "Primary", className: "bg-primary text-primary-foreground" },
+  { role: "secondary", label: "Secondary", className: "bg-secondary text-secondary-foreground" },
+  { role: "accent", label: "Accent", className: "bg-accent text-accent-foreground" },
+];
+
+/** A colour chip: drag it onto another, or click two in turn, to swap them. */
+const SwapChip = ({
+  role,
+  label,
+  className,
+  picked,
+  onPick,
+  onDropFrom,
+}: {
+  role: ColourRole;
+  label: string;
+  className: string;
+  picked: boolean;
+  onPick: () => void;
+  onDropFrom: (from: ColourRole) => void;
+}) => {
+  const [over, setOver] = useState(false);
+  return (
+    <button
+      type="button"
+      draggable
+      onClick={onPick}
+      aria-pressed={picked}
+      aria-label={`${label} colour: drag or click to swap`}
+      onDragStart={(event) => {
+        event.dataTransfer.setData("text/x-dsync-colour", role);
+        event.dataTransfer.effectAllowed = "move";
+      }}
+      onDragOver={(event) => {
+        if (!event.dataTransfer.types.includes("text/x-dsync-colour")) return;
+        event.preventDefault();
+        setOver(true);
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(event) => {
+        event.preventDefault();
+        setOver(false);
+        const from = event.dataTransfer.getData("text/x-dsync-colour") as ColourRole;
+        if (from && from !== role) onDropFrom(from);
+      }}
+      className={cn(
+        "flex h-7 flex-1 cursor-grab items-center justify-center rounded-md text-[11px] font-medium active:cursor-grabbing",
+        (over || picked) && "ring-2 ring-foreground ring-offset-1 ring-offset-background",
+        className,
+      )}
+    >
+      {label}
+    </button>
+  );
+};
+
 const TrackSlider = ({
   label,
   value,
@@ -154,6 +214,37 @@ export const ThemePicker = () => {
 
   const activePalette = PALETTES.find((p) => matchesPalette(config, p));
 
+  /** The hue and intensity a role currently shows (secondary may be derived). */
+  const colourOf = (role: ColourRole) =>
+    role === "primary"
+      ? { hue: config.primaryHue, sat: config.primarySat }
+      : role === "accent"
+        ? { hue: config.accentHue, sat: config.accentSat }
+        : resolvedSecondary(config, resolvedMode);
+  const patchFor = (role: ColourRole, raw: { hue: number; sat: number }) => {
+    const c = { hue: Math.round(raw.hue), sat: Math.round(raw.sat) };
+    return role === "primary"
+      ? { primaryHue: c.hue, primarySat: c.sat }
+      : role === "accent"
+        ? { accentHue: c.hue, accentSat: c.sat }
+        : { secondaryHue: c.hue, secondarySat: c.sat };
+  };
+
+  /** Two roles trade hue and intensity; the palette becomes "custom". */
+  const swapColors = (a: ColourRole, b: ColourRole) => {
+    if (a === b) return;
+    setConfig({ presetId: "custom", ...patchFor(a, colourOf(b)), ...patchFor(b, colourOf(a)) });
+  };
+  // Click one chip, then another, to swap them (the keyboard-friendly way).
+  const [picked, setPicked] = useState<ColourRole | null>(null);
+  const pick = (role: ColourRole) => {
+    if (!picked) return setPicked(role);
+    if (picked !== role) swapColors(picked, role);
+    setPicked(null);
+  };
+  const secondary = resolvedSecondary(config, resolvedMode);
+  const secondaryOwn = config.secondaryHue !== undefined;
+
   const satTrack = (hue: number) =>
     `linear-gradient(to right, hsl(${hue} 0% 55%), hsl(${hue} 100% 55%))`;
 
@@ -170,7 +261,12 @@ export const ThemePicker = () => {
         </Button>
       </PopoverTrigger>
 
-      <PopoverContent align="end" className="w-[320px] p-0">
+      {/* Capped to the space on screen and scrollable, so "Fine tune" never runs off the bottom. */}
+      <PopoverContent
+        align="end"
+        collisionPadding={12}
+        className="max-h-[var(--radix-popover-content-available-height)] w-[320px] overflow-y-auto overscroll-contain p-0"
+      >
         <div className="flex items-center justify-between px-4 pb-3 pt-4">
           <div>
             <h3 className="text-sm font-semibold text-foreground">Appearance</h3>
@@ -315,6 +411,33 @@ export const ThemePicker = () => {
                 onChange={(accentHue) => setConfig({ presetId: "custom", accentHue })}
               />
               <TrackSlider
+                label="Secondary hue"
+                value={secondary.hue}
+                min={0}
+                max={360}
+                suffix="°"
+                trackImage={HUE_TRACK}
+                onChange={(hue) => setConfig({ presetId: "custom", secondaryHue: hue, secondarySat: secondary.sat })}
+              />
+              <TrackSlider
+                label="Secondary intensity"
+                value={secondary.sat}
+                min={0}
+                max={100}
+                suffix="%"
+                trackImage={satTrack(secondary.hue)}
+                onChange={(sat) => setConfig({ presetId: "custom", secondaryHue: secondary.hue, secondarySat: sat })}
+              />
+              {secondaryOwn && (
+                <button
+                  type="button"
+                  onClick={() => setConfig({ secondaryHue: undefined, secondarySat: undefined })}
+                  className="-mt-1 text-[11px] text-primary hover:underline"
+                >
+                  Secondary: follow primary again
+                </button>
+              )}
+              <TrackSlider
                 label="Surface tint"
                 value={config.neutralHue}
                 min={0}
@@ -358,9 +481,9 @@ export const ThemePicker = () => {
         <Separator />
 
         {/*
-          Sample of the surfaces the choice drives. These are swatches, not
-          controls — rendering them as <button> made people click a dead
-          "Secondary" button, so they are plain elements with no affordance.
+          Sample of the surfaces the choice drives. Any two of Primary,
+          Secondary and Accent can be swapped: drag one onto another, or click
+          one and then the other.
         */}
         <div className="space-y-2 rounded-b-md bg-gradient-card px-4 py-3">
           <div className="flex items-center gap-2">
@@ -372,23 +495,22 @@ export const ThemePicker = () => {
               </p>
             </div>
           </div>
-          <div className="flex gap-1.5">
-            {[
-              { label: "Primary", className: "bg-primary text-primary-foreground" },
-              { label: "Secondary", className: "bg-secondary text-secondary-foreground" },
-              { label: "Accent", className: "bg-accent text-accent-foreground" },
-            ].map(({ label, className }) => (
-              <span
-                key={label}
-                className={cn(
-                  "flex h-7 flex-1 items-center justify-center rounded-md text-[11px] font-medium",
-                  className,
-                )}
-              >
-                {label}
-              </span>
+          <div className="flex items-center gap-1.5">
+            {COLOUR_ROLES.map(({ role, label, className }) => (
+              <SwapChip
+                key={role}
+                role={role}
+                label={label}
+                className={className}
+                picked={picked === role}
+                onPick={() => pick(role)}
+                onDropFrom={(from) => swapColors(from, role)}
+              />
             ))}
           </div>
+          <p className="text-[10.5px] text-muted-foreground">
+            {picked ? "Now click the colour to swap it with." : "Drag a colour onto another, or click two, to swap them."}
+          </p>
         </div>
       </PopoverContent>
     </Popover>

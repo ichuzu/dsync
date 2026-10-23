@@ -55,7 +55,7 @@ export const GameListItem = ({ game, onClick, live }: GameListItemProps) => {
           {playing && (
             <span
               title="Currently playing"
-              className="h-[7px] w-[7px] shrink-0 animate-pulse rounded-full bg-success"
+              className="h-[7px] w-[7px] shrink-0 rounded-full bg-success shadow-[0_0_6px_hsl(var(--success))]"
             />
           )}
           <p className="truncate font-semibold">{game.title}</p>

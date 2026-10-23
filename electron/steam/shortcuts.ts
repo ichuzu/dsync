@@ -1,10 +1,9 @@
 import { app } from "electron";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { findSteamRoot } from "./paths";
 import { existingArt } from "./artwork";
+import { runningProcessNames } from "../winHelper";
 
 /**
  * Non-Steam games the user added to Steam ("Add a Non-Steam Game").
@@ -115,38 +114,29 @@ async function exeIcon(exe: string): Promise<string | null> {
   }
 }
 
-const run = promisify(execFile);
 let lastCheck = 0;
 let lastRunning: string | null = null;
 
 /**
  * Which non-Steam game is running, by its exe in the process list. Steam's
  * RunningAppID registry value covers only real Steam apps, so this is the
- * fallback for shortcuts. tasklist is cheap but not free, so the answer is
- * reused for a few seconds.
+ * fallback for shortcuts, asked of the long-lived helper (no tasklist.exe)
+ * and reused for a few seconds.
  */
 export async function runningShortcut(): Promise<string | null> {
   if (process.platform !== "win32" || known.size === 0) return null;
   if (Date.now() - lastCheck < 5000) return lastRunning;
   lastCheck = Date.now();
-  try {
-    const { stdout } = await run("tasklist", ["/FO", "CSV", "/NH"], { windowsHide: true, maxBuffer: 4 * 1024 * 1024 });
-    const images = new Set(
-      stdout
-        .split(/\r?\n/)
-        .map((line) => line.split(",")[0]?.replace(/"/g, "").toLowerCase())
-        .filter(Boolean),
-    );
-    lastRunning = null;
-    for (const [appid, info] of known) {
-      const image = basename(info.exe.replace(/^"|"$/g, "")).toLowerCase();
-      if (image && images.has(image)) {
-        lastRunning = appid;
-        break;
-      }
+  const names = await runningProcessNames();
+  lastRunning = null;
+  if (!names) return lastRunning;
+  for (const [appid, info] of known) {
+    // Process names come without ".exe".
+    const image = basename(info.exe.replace(/^"|"$/g, "")).toLowerCase().replace(/\.exe$/, "");
+    if (image && names.has(image)) {
+      lastRunning = appid;
+      break;
     }
-  } catch {
-    lastRunning = null;
   }
   return lastRunning;
 }

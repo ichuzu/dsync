@@ -171,8 +171,7 @@ const Index = () => {
             className="flex w-full items-center gap-3 rounded-xl border border-success/40 bg-success/10 px-4 py-3 text-left transition-colors enabled:hover:bg-success/15"
           >
             <span className="relative flex h-2.5 w-2.5 shrink-0">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success opacity-75" />
-              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-success" />
+              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-success shadow-[0_0_8px_hsl(var(--success))]" />
             </span>
             <span className="text-sm">
               <span className="text-muted-foreground">Now playing </span>

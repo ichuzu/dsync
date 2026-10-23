@@ -234,7 +234,7 @@ const GameDetailContent = ({ game }: { game: Game }) => {
             </span>
             {playing && (
               <span className="flex items-center gap-1 rounded-md bg-success/20 px-1.5 py-0.5 text-success">
-                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-success" />
+                <span className="h-1.5 w-1.5 rounded-full bg-success shadow-[0_0_6px_hsl(var(--success))]" />
                 <span className="text-[10px] font-bold">Playing</span>
               </span>
             )}

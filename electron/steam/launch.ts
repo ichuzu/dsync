@@ -1,5 +1,6 @@
 import { shell } from "electron";
-import { findSteamRoot, readRegistryDword } from "./paths";
+import { findSteamRoot } from "./paths";
+import { readUserRegistry } from "../winHelper";
 
 /**
  * Launching games and knowing which one is running.
@@ -14,7 +15,8 @@ import { findSteamRoot, readRegistryDword } from "./paths";
  * when the user's profile is private.
  */
 
-const STEAM_KEY = "HKCU\\Software\\Valve\\Steam";
+/** Under HKEY_CURRENT_USER; read through the long-lived helper, not reg.exe. */
+const STEAM_KEY = "Software\\Valve\\Steam";
 
 /** Asks Steam to launch an app. Resolves once the request is handed off. */
 export async function launchGame(appid: string): Promise<void> {
@@ -48,12 +50,11 @@ export async function installGame(appid: string): Promise<void> {
  * Steam clears this back to 0 on exit.
  */
 export async function getRunningAppId(): Promise<string | null> {
-  const id = await readRegistryDword(STEAM_KEY, "RunningAppID");
-  return id && id > 0 ? String(id) : null;
+  const id = Number(await readUserRegistry(STEAM_KEY, "RunningAppID"));
+  return id > 0 ? String(id) : null;
 }
 
 /** True when the Steam client itself is running. */
 export async function isSteamRunning(): Promise<boolean> {
-  const pid = await readRegistryDword(STEAM_KEY, "pid");
-  return Boolean(pid && pid > 0);
+  return Number(await readUserRegistry(STEAM_KEY, "pid")) > 0;
 }

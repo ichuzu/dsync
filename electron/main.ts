@@ -12,7 +12,7 @@ import {
   globalShortcut,
 } from "electron";
 import { readFile, writeFile, mkdir, readdir, unlink } from "node:fs/promises";
-import { createReadStream, existsSync } from "node:fs";
+import { createReadStream, existsSync, watch } from "node:fs";
 import { join, normalize, sep } from "node:path";
 import { Readable } from "node:stream";
 
@@ -24,7 +24,7 @@ import {
   type SteamStatus,
   type ArtworkResult,
 } from "./ipc";
-import { scanLocalLibrary, type LocalGame } from "./steam/localLibrary";
+import { findLibraryFolders, scanLocalLibrary, type LocalGame } from "./steam/localLibrary";
 import {
   getRunningAppId,
   installGame,
@@ -36,7 +36,7 @@ import { findSteamRoot } from "./steam/paths";
 import { readTaskbarTheme, watchTaskbarTheme } from "./taskbarTheme";
 import { toIco } from "./ico";
 import { installUpdateNow, pendingUpdate, startAutoUpdates } from "./updater";
-import { getForegroundWindow, setForegroundWindow, stopForegroundHelper, warmForegroundHelper } from "./foreground";
+import { getForegroundWindow, setForegroundWindow, stopWinHelper, warmWinHelper } from "./winHelper";
 import { readSteamCollections } from "./steam/collections";
 import { readNonSteamGames, runningShortcut, shortcutInfo } from "./steam/shortcuts";
 import { findArtwork, saveArtwork } from "./steam/artwork";
@@ -202,15 +202,34 @@ const send = (channel: string, payload: unknown) => {
 };
 
 /**
- * Polls Steam's on-disk state and pushes changes to the renderer.
+ * Keeps the renderer up to date with installs, downloads and the running game.
  *
- * Polling rather than fs.watch: Steam rewrites an app manifest continuously
- * while downloading, and a watcher fires far more often than the UI can use.
- * A rescan of ~60 manifests costs a couple of milliseconds, and diffing means
- * the renderer only wakes when something actually changed.
+ * Installs and downloads: Steam rewrites an app's manifest whenever its state
+ * changes, so the library folders are watched and only re-read when one of
+ * them changes (a burst of writes, as during a download, is debounced into
+ * one re-read). While a download is running the manifests are also re-read
+ * every couple of seconds, for a live progress bar; otherwise a slow poll is
+ * just a safety net for missed watch events (network drives, new folders).
+ *
+ * The running game is checked every few seconds; that is one cheap question
+ * to the long-lived helper (see winHelper.ts), not a spawned process.
  */
 function startWatchers(): void {
-  const tick = async () => {
+  const DOWNLOAD_POLL_MS = 2500;
+  const IDLE_POLL_MS = 60_000;
+  const RUNNING_POLL_MS = 2500;
+
+  let scanning = false;
+  let rescanQueued = false;
+  let lastScan = 0;
+
+  const scan = async () => {
+    if (scanning) {
+      rescanQueued = true;
+      return;
+    }
+    scanning = true;
+    lastScan = Date.now();
     try {
       const games = await scanLocalLibrary();
 
@@ -231,9 +250,39 @@ function startWatchers(): void {
         if (finished) notify("Download complete", "Your Steam downloads have finished.");
       }
     } catch {
-      // A drive went away mid-scan; the next tick will pick it back up.
+      // A drive went away mid-scan; the next scan will pick it back up.
+    } finally {
+      scanning = false;
+      if (rescanQueued) {
+        rescanQueued = false;
+        void scan();
+      }
     }
+  };
 
+  // Watch every steamapps folder; a burst of writes becomes one re-read.
+  let debounce: NodeJS.Timeout | undefined;
+  const onFolderChange = (_event: string, file: string | Buffer | null) => {
+    if (file && !String(file).toLowerCase().endsWith(".acf")) return;
+    clearTimeout(debounce);
+    debounce = setTimeout(() => void scan(), 750);
+  };
+  void findLibraryFolders().then((folders) => {
+    for (const folder of folders) {
+      try {
+        watch(folder, { persistent: false }, onFolderChange);
+      } catch {
+        // Unwatchable (permissions, odd drive): the slow poll covers it.
+      }
+    }
+  });
+
+  setInterval(() => {
+    const interval = lastDownloads ? DOWNLOAD_POLL_MS : IDLE_POLL_MS;
+    if (Date.now() - lastScan >= interval) void scan();
+  }, DOWNLOAD_POLL_MS);
+
+  const checkRunning = async () => {
     try {
       // Steam apps from the registry; non-Steam games by their process.
       const running = (await getRunningAppId()) ?? (await runningShortcut());
@@ -249,12 +298,13 @@ function startWatchers(): void {
         }
       }
     } catch {
-      // reg.exe unavailable — presence just stays unknown.
+      // Helper unavailable: presence just stays unknown until it's back.
     }
   };
 
-  void tick();
-  setInterval(tick, 2500);
+  void scan();
+  void checkRunning();
+  setInterval(checkRunning, RUNNING_POLL_MS);
 }
 
 function notify(title: string, body: string): void {
@@ -738,7 +788,7 @@ function nativeHandle(win: BrowserWindow): string {
 let overlayPrevFocus: string | null = null;
 
 function registerOverlayHotkey(): void {
-  warmForegroundHelper();
+  warmWinHelper();
   globalShortcut.register(OVERLAY_HOTKEY, async () => {
     if (!overlayEditing && liveOverlay()) overlayPrevFocus = await getForegroundWindow();
     setOverlayEditing(!overlayEditing);
@@ -754,7 +804,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on("second-instance", showWindow);
   app.on("will-quit", () => {
     globalShortcut.unregisterAll();
-    stopForegroundHelper();
+    stopWinHelper();
   });
 
   void app.whenReady().then(async () => {
