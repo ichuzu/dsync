@@ -3,14 +3,31 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#0e1117" />
+    <meta name="theme-color" content="#0e1015" />
     <title>Dsync — Your unified PC game library</title>
     <meta
       name="description"
       content="Track every game and achievement across Steam, Epic, and GOG in one dashboard."
     />
     <meta name="author" content="Dsync" />
-    <link rel="icon" href="/favicon.ico" />
+
+    <!--
+      Every cover, header and capsule comes from the Steam CDN, so open the
+      connection during head parse instead of paying DNS + TLS on the first
+      <img> the page renders.
+    -->
+    <link rel="preconnect" href="https://cdn.cloudflare.steamstatic.com" crossorigin />
+    <link rel="dns-prefetch" href="https://cdn.cloudflare.steamstatic.com" />
+    <!--
+      Three icons on purpose. Browsers prefer the SVG, but they also request
+      /favicon.ico at the origin root on their own, and a 404 there leaves a
+      previously cached icon in place — so the .ico must exist and carry the
+      current mark. The ?v= busts the per-URL favicon cache, which survives a
+      hard refresh; bump it whenever the mark changes.
+    -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=5" />
+    <link rel="icon" type="image/x-icon" sizes="16x16 32x32 48x48 64x64" href="/favicon.ico?v=5" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=5" />
 
     <meta property="og:title" content="Dsync — Your unified PC game library" />
     <meta
@@ -20,6 +37,42 @@
     <meta property="og:type" content="website" />
 
     <meta name="twitter:card" content="summary_large_image" />
+
+    <!--
+      Pre-paint theme guard. The full token set is generated in
+      src/theme/tokens.ts once React mounts; this only settles the base surface
+      so a light-mode visitor never sees a frame of the dark default.
+    -->
+    <script>
+      (function () {
+        try {
+          var saved = JSON.parse(localStorage.getItem("dsync:theme") || "{}");
+          var mode = saved.mode || "dark";
+          if (mode === "system") {
+            mode = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+          }
+          var hue = typeof saved.neutralHue === "number" ? saved.neutralHue : 224;
+          var sat = typeof saved.neutralSat === "number" ? saved.neutralSat : 20;
+          var root = document.documentElement;
+          root.classList.add(mode);
+          root.style.colorScheme = mode;
+          root.style.setProperty(
+            "--background",
+            mode === "light"
+              ? hue + " " + Math.min(sat, 30) * 1.2 + "% 97%"
+              : hue + " " + sat + "% 7%",
+          );
+          root.style.setProperty(
+            "--foreground",
+            mode === "light"
+              ? hue + " " + Math.min(sat + 10, 40) + "% 12%"
+              : hue + " " + Math.min(sat, 20) + "% 96%",
+          );
+        } catch (e) {
+          /* No storage access — fall through to the CSS defaults. */
+        }
+      })();
+    </script>
   </head>
 
   <body>

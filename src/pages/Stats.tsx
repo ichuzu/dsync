@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { Card } from "@/components/ui/card";
 import {
   Clock,
@@ -13,6 +13,9 @@ import {
   Gamepad2,
   PackageOpen,
   Activity,
+  Hourglass,
+  Zap,
+  Flame,
   PieChart as PieChartIcon,
 } from "lucide-react";
 import { mockGames } from "@/data/mockGames";
@@ -27,6 +30,8 @@ import { AppNav } from "@/components/AppNav";
 import { AchievementStats } from "@/components/AchievementStats";
 import { ContributionHeatmap } from "@/components/ContributionHeatmap";
 import { GenrePieChart, type GenreSlice } from "@/components/GenrePieChart";
+import { GameStatsTable } from "@/components/GameStatsTable";
+import { LibraryDistribution } from "@/components/LibraryDistribution";
 import type { RarityBreakdown } from "@/types/game";
 import { cn } from "@/lib/utils";
 
@@ -48,7 +53,12 @@ const Stats = () => {
 
   // Genre breakdown, weighted by playtime. Mock games carry their own genre;
   // real Steam games get it from the background-resolved genres map (by appid).
-  const genreOf = (g: Game) => (usingSteam ? steam.genres[g.id] : g.genre);
+  // Stable identity so the per-game table's sort/filter memo is not
+  // invalidated on every render of this page.
+  const genreOf = useCallback(
+    (g: Game) => (usingSteam ? steam.genres[g.id] : g.genre),
+    [usingSteam, steam.genres],
+  );
   const genre = useMemo(() => {
     const byGenre = new Map<string, number>();
     let known = 0;
@@ -83,10 +93,24 @@ const Stats = () => {
       withAch.length === 0
         ? 0
         : withAch.reduce((s, g) => s + completionPercentage(g), 0) / withAch.length;
+    // Median beats the mean here: a handful of 2,000h games would otherwise
+    // hide the fact that most of the library is barely touched.
+    const sortedHours = games.map((g) => g.playtimeHours).sort((a, b) => a - b);
+    const mid = Math.floor(sortedHours.length / 2);
+    const median =
+      sortedHours.length === 0
+        ? 0
+        : sortedHours.length % 2
+          ? sortedHours[mid]
+          : (sortedHours[mid - 1] + sortedHours[mid]) / 2;
+    const neverPlayed = games.filter((g) => g.playtimeHours === 0).length;
     return {
       totalGames: games.length,
       totalHours,
-      backlog: games.filter((g) => g.playtimeHours === 0).length,
+      medianHours: median,
+      neverPlayed,
+      neverPlayedShare: games.length ? (neverPlayed / games.length) * 100 : 0,
+      backlog: neverPlayed,
       playingNow: games.filter(isCurrentlyPlaying).length,
       unlocked: accurate ? accurate.totalUnlocked : games.reduce((s, g) => s + g.earnedAchievements, 0),
       perfect: accurate ? accurate.perfectGames : games.filter(isPerfectGame).length,
@@ -94,6 +118,10 @@ const Stats = () => {
       avgCompletion: accurate ? accurate.avgCompletion : demoAvg,
     };
   }, [games, accurate]);
+
+  // Achievement density: how many unlocks each 100 hours of play yields.
+  const unlocksPer100h =
+    totals.totalHours > 0 ? (totals.unlocked / totals.totalHours) * 100 : 0;
 
   const createdAt = usingSteam ? steam.profile?.createdAt : undefined;
   const rate = useMemo(() => {
@@ -125,6 +153,15 @@ const Stats = () => {
     list.sort((a, b) => (b.date > a.date ? 1 : b.date < a.date ? -1 : 0));
     return list.slice(0, 30);
   }, [games, usingSteam, steam.libraryStats]);
+
+  // appid -> start date, for the per-game table. Mock games have no unlock
+  // history, so their lastPlayed date stands in.
+  const startedMap = useMemo<Record<string, string>>(() => {
+    if (usingSteam) return steam.libraryStats?.started ?? {};
+    const m: Record<string, string> = {};
+    for (const g of games) if (g.lastPlayed) m[g.id] = g.lastPlayed;
+    return m;
+  }, [usingSteam, steam.libraryStats, games]);
 
   const startedLoading = usingSteam && steam.statsLoading && !steam.libraryStats;
   const achHint = refining ? "refining…" : undefined;
@@ -160,6 +197,18 @@ const Stats = () => {
     for (const a of activity) r[a.d] = (r[a.d] ?? 0) + a.n;
     return r;
   }, [activity]);
+  // Single biggest unlock day on record, for the headline grid.
+  const bestDay = useMemo(() => {
+    let key = "";
+    let n = 0;
+    for (const [d, count] of Object.entries(activityByDay)) {
+      if (count > n) {
+        key = d;
+        n = count;
+      }
+    }
+    return n > 0 ? { date: key, count: n } : null;
+  }, [activityByDay]);
   const years = useMemo(() => {
     const s = new Set<number>();
     for (const a of activity) s.add(Number(a.d.slice(0, 4)));
@@ -210,11 +259,34 @@ const Stats = () => {
           <Stat icon={<Library className="h-4 w-4" />} label="Games owned" value={totals.totalGames.toLocaleString()} />
           <Stat icon={<Clock className="h-4 w-4" />} label="Total playtime" value={`${Math.round(totals.totalHours).toLocaleString()}h`} />
           <Stat icon={<Award className="h-4 w-4" />} label="Achievements" value={totals.unlocked.toLocaleString()} hint={achHint} />
-          <Stat icon={<Sparkles className="h-4 w-4 text-rarity-legendary" />} label="Perfect games" value={totals.perfect.toLocaleString()} hint={achHint} />
+          <Stat icon={<Sparkles className="h-4 w-4 text-perfect" />} label="Perfect games" value={totals.perfect.toLocaleString()} hint={achHint} />
           <Stat icon={<TrendingUp className="h-4 w-4 text-success" />} label="Avg completion" value={`${totals.avgCompletion.toFixed(0)}%`} hint={achHint} />
           <Stat icon={<Trophy className="h-4 w-4" />} label="Games w/ achievements" value={totals.withAchievements.toLocaleString()} hint={achHint} />
           <Stat icon={<Gamepad2 className="h-4 w-4 text-success" />} label="Recently played" value={totals.playingNow.toLocaleString()} hint="last 2 weeks" />
-          <Stat icon={<PackageOpen className="h-4 w-4" />} label="Backlog (never played)" value={totals.backlog.toLocaleString()} />
+          <Stat
+            icon={<PackageOpen className="h-4 w-4" />}
+            label="Never played"
+            value={totals.neverPlayed.toLocaleString()}
+            hint={`${totals.neverPlayedShare.toFixed(0)}% of the library`}
+          />
+          <Stat
+            icon={<Hourglass className="h-4 w-4" />}
+            label="Median playtime"
+            value={`${formatHours(totals.medianHours)}h`}
+            hint="half your games sit below this"
+          />
+          <Stat
+            icon={<Zap className="h-4 w-4 text-accent" />}
+            label="Unlocks per 100h"
+            value={unlocksPer100h.toFixed(1)}
+            hint={achHint ?? "achievement density"}
+          />
+          <Stat
+            icon={<Flame className="h-4 w-4 text-accent" />}
+            label="Best day"
+            value={bestDay ? bestDay.count.toLocaleString() : "—"}
+            hint={bestDay ? bestDay.date : "no unlock history yet"}
+          />
         </div>
 
         {/* Playtime rate */}
@@ -427,6 +499,9 @@ const Stats = () => {
         {/* Achievements by rarity */}
         <AchievementStats breakdown={rarityBreakdown} />
 
+        {/* Shape of the library: playtime and completion bands */}
+        <LibraryDistribution games={games} />
+
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           {/* Most played */}
           <Card className="bg-gradient-card p-6">
@@ -493,6 +568,14 @@ const Stats = () => {
             )}
           </Card>
         </div>
+
+        {/* Every game, one row each */}
+        <GameStatsTable
+          games={games}
+          genreOf={genreOf}
+          started={startedMap}
+          loading={refining}
+        />
       </div>
     </div>
   );

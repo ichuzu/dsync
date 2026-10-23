@@ -1,25 +1,40 @@
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { ThemeProvider as MuiThemeProvider } from "@mui/material/styles";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Index from "./pages/Index";
 import News from "./pages/News";
 import Stats from "./pages/Stats";
+import Backlog from "./pages/Backlog";
+import Overlay from "./pages/Overlay";
 import NotFound from "./pages/NotFound";
+import Wiki from "./pages/Wiki";
 import { SteamCallback } from "./components/SteamCallback";
 import { SteamProvider } from "@/hooks/useSteam";
 import { CollectionsProvider } from "@/hooks/useCollections";
-import { muiTheme } from "./theme/muiTheme";
+import { HltbDailySync } from "@/hooks/useHltb";
+import { ThemeProvider } from "./theme/ThemeProvider";
 
 const queryClient = new QueryClient();
 
-const App = () => (
+/**
+ * The in-game overlay window loads /overlay. It gets only the theme: the
+ * Steam and collections providers would start the main window's syncs again.
+ */
+const isOverlay = typeof window !== "undefined" && window.location.pathname.startsWith("/overlay");
+
+const App = () =>
+  isOverlay ? (
+    <ThemeProvider>
+      <Overlay />
+    </ThemeProvider>
+  ) : (
   <QueryClientProvider client={queryClient}>
-    <MuiThemeProvider theme={muiTheme}>
+    <ThemeProvider>
       <SteamProvider>
         <CollectionsProvider>
+        <HltbDailySync />
         <TooltipProvider>
           <Toaster />
           <Sonner />
@@ -28,6 +43,9 @@ const App = () => (
               <Route path="/" element={<Index />} />
               <Route path="/news" element={<News />} />
               <Route path="/stats" element={<Stats />} />
+              <Route path="/backlog" element={<Backlog />} />
+              <Route path="/wiki" element={<Wiki />} />
+              <Route path="/designs" element={<Navigate to="/wiki" replace />} />
               <Route path="/steam-callback" element={<SteamCallback />} />
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
               <Route path="*" element={<NotFound />} />
@@ -36,7 +54,7 @@ const App = () => (
         </TooltipProvider>
         </CollectionsProvider>
       </SteamProvider>
-    </MuiThemeProvider>
+    </ThemeProvider>
   </QueryClientProvider>
 );
 

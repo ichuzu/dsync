@@ -205,7 +205,15 @@ async function fetchOwnedGames(
     `${STEAM_API}/IPlayerService/GetOwnedGames/v1/?key=${apiKey}&steamid=${steamId}` +
     `&include_appinfo=1&include_played_free_games=1&format=json`;
   const res = await fetchImpl(url);
-  if (!res.ok) return [];
+  // A rejected key must not look like an empty library: the UI would blame
+  // the user's privacy settings for what is really a revoked/rerolled key.
+  if (res.status === 401 || res.status === 403) {
+    throw new Error(
+      "Steam rejected the API key (it may have been revoked or regenerated). " +
+        "Get a new one at steamcommunity.com/dev/apikey and update it in Settings.",
+    );
+  }
+  if (!res.ok) throw new Error(`Steam returned an error (${res.status}). Try again in a minute.`);
   const data = await res.json();
   return (data?.response?.games as OwnedGame[]) ?? [];
 }
@@ -323,13 +331,20 @@ export async function fetchGameAchievements(
     }
   };
 
-  const [playerData, schemaData, globals] = await Promise.all([
+  const [playerData, schemaData, globals, fullData] = await Promise.all([
     getJson(
       `${STEAM_API}/ISteamUserStats/GetPlayerAchievements/v1/?key=${apiKey}&steamid=${steamId}&appid=${appid}&l=english`,
     ),
     getJson(`${STEAM_API}/ISteamUserStats/GetSchemaForGame/v2/?key=${apiKey}&appid=${appid}`),
     fetchGlobalPercentages(appid, fetchImpl),
+    // The schema leaves hidden achievements' descriptions blank; this newer
+    // endpoint (no key needed) includes them.
+    getJson(`${STEAM_API}/IPlayerService/GetGameAchievements/v1/?appid=${appid}&language=english`),
   ]);
+  const fullDescriptions = new Map<string, string>();
+  for (const a of fullData?.response?.achievements ?? []) {
+    if (a?.internal_name && a.localized_desc) fullDescriptions.set(String(a.internal_name), String(a.localized_desc));
+  }
 
   const playerList = playerData?.playerstats?.achievements ?? [];
   const playerMap = new Map<
@@ -376,7 +391,9 @@ export async function fetchGameAchievements(
       id: s.apiname,
       name: s.displayName || s.apiname,
       description:
-        s.description || (s.hidden && !unlocked ? "Hidden — unlock to reveal" : ""),
+        s.description ||
+        fullDescriptions.get(s.apiname) ||
+        (s.hidden && !unlocked ? "Hidden — unlock to reveal" : ""),
       rarity: rarityFromPercent(hasPct ? pct : 50),
       globalUnlockPct: pct,
       unlocked,
@@ -538,6 +555,268 @@ export async function fetchLibraryGenres(
   const out: Record<string, string> = {};
   for (const [appid, genre] of pairs) if (genre) out[appid] = genre;
   return out;
+}
+
+export interface LibraryTags {
+  /** appid → the store tag ids Steam shows for it (top 20, most-voted first). */
+  tags: Record<string, number[]>;
+  /** tag id → English name, for describing a dynamic collection's rule. */
+  names: Record<string, string>;
+}
+
+/**
+ * Store tags for the given apps (top 20 each, most-voted first).
+ * IStoreBrowseService needs no key; batches of 100 keep the GET URL well
+ * under length limits.
+ */
+async function fetchStoreTags(
+  appids: number[],
+  fetchImpl: typeof fetch,
+): Promise<Record<string, number[]>> {
+  const batches: number[][] = [];
+  for (let i = 0; i < appids.length; i += 100) batches.push(appids.slice(i, i + 100));
+
+  const tags: Record<string, number[]> = {};
+  await mapLimit(batches, 4, async (batch) => {
+    const input = {
+      ids: batch.map((appid) => ({ appid })),
+      context: { language: "english", country_code: "US" },
+      data_request: { include_tag_count: 20 },
+    };
+    try {
+      const res = await fetchImpl(
+        `${STEAM_API}/IStoreBrowseService/GetItems/v1/?input_json=${encodeURIComponent(JSON.stringify(input))}`,
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      for (const item of data?.response?.store_items ?? []) {
+        if (item?.appid && Array.isArray(item.tagids)) tags[String(item.appid)] = item.tagids;
+      }
+    } catch {
+      /* a failed batch just leaves those games untagged */
+    }
+  });
+  return tags;
+}
+
+/** tag id → English name. Cosmetic, so failures give an empty map. */
+async function fetchTagNames(fetchImpl: typeof fetch): Promise<Record<string, string>> {
+  const names: Record<string, string> = {};
+  try {
+    const res = await fetchImpl(`${STEAM_API}/IStoreService/GetTagList/v1/?language=english`);
+    const data = res.ok ? await res.json() : null;
+    for (const t of data?.response?.tags ?? []) names[String(t.tagid)] = t.name;
+  } catch {
+    /* names are cosmetic */
+  }
+  return names;
+}
+
+/**
+ * Store tags for every owned game, which is what the Steam client's dynamic
+ * collections filter on (~10 calls for 900 games).
+ */
+export async function fetchLibraryTags(
+  steamId: string,
+  apiKey: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<LibraryTags> {
+  const owned = await fetchOwnedGames(steamId, apiKey, fetchImpl);
+  const [tags, names] = await Promise.all([
+    fetchStoreTags(owned.map((g) => g.appid), fetchImpl),
+    fetchTagNames(fetchImpl),
+  ]);
+  return { tags, names };
+}
+
+/** An upcoming game picked for the player, with the tags that earned it a place. */
+export interface RecommendedGame extends UpcomingGame {
+  /** Up to two tag names, strongest first: why it was picked. */
+  reasons: string[];
+}
+
+/**
+ * How much more an hour played in the last two weeks counts than an hour
+ * from any time. At 4, 20 recent hours outweigh a 1,000-hour game from years
+ * ago, while long-time favourites still count.
+ */
+const RECENT_BOOST = 4;
+
+/** Format/meta tags: they say how a game is played or sold, not what it is. */
+const META_TAGS = new Set([
+  "Singleplayer", "Multiplayer", "Co-op", "Online Co-Op", "Local Co-Op", "Local Multiplayer",
+  "PvP", "Online PvP", "PvE", "Massively Multiplayer", "Action", "Adventure", "Indie",
+  "Casual", "Early Access", "Free to Play", "3D", "2D", "Great Soundtrack", "Atmospheric",
+  "Colorful", "Cute", "First-Person", "Third Person", "Realistic", "Controller", "Family Friendly",
+  "Stylized", "Fantasy", "Sci-fi", "Funny", "Simulation", "Strategy", "RPG",
+]);
+
+/** Adult-content tags: games carrying any of these are never suggested. */
+const ADULT_TAGS = new Set(["Sexual Content", "Nudity", "NSFW", "Hentai", "Mature"]);
+
+const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+/** Steam's coming_soon_display says how much of the date is real. */
+function releaseFrom(release: {
+  steam_release_date?: number;
+  coming_soon_display?: string;
+} | undefined): Pick<UpcomingGame, "releaseDate" | "releaseString" | "precise"> {
+  const unix = release?.steam_release_date ?? 0;
+  const display = release?.coming_soon_display ?? "";
+  if (!unix || display === "text_comingsoon" || display === "text_tba") {
+    return { releaseDate: 0, releaseString: "Coming soon", precise: false };
+  }
+  const d = new Date(unix * 1000);
+  const year = d.getUTCFullYear();
+  if (display === "date_full") {
+    return {
+      releaseDate: unix,
+      releaseString: d.toLocaleDateString("en-GB", { timeZone: "UTC", day: "numeric", month: "short", year: "numeric" }),
+      precise: true,
+    };
+  }
+  if (display === "date_month") return { releaseDate: unix, releaseString: `${MONTH_NAMES[d.getUTCMonth()]} ${year}`, precise: false };
+  if (display === "date_quarter") return { releaseDate: unix, releaseString: `Q${Math.floor(d.getUTCMonth() / 3) + 1} ${year}`, precise: false };
+  return { releaseDate: unix, releaseString: String(year), precise: false };
+}
+
+/**
+ * Upcoming releases the player is likely to want, from what they actually play.
+ *
+ *   1. Taste: the store tags of the games they play, each game weighted by
+ *      log hours (so one 2,000-hour game doesn't drown out everything else)
+ *      and each tag by its rank on that game. The last two weeks of play
+ *      count RECENT_BOOST times as much as all-time hours, so picks follow
+ *      what they're into now.
+ *   2. Pool: Steam's most popular coming-soon games (a few hundred).
+ *   3. Score each pool game by the taste weight of its tags, scaled by how
+ *      rare the tag is within the pool, so common tags count for little and
+ *      "Souls-like" for a lot. Tags that describe format rather than genre
+ *      (Multiplayer, Singleplayer, Indie, …) are ignored outright, and the
+ *      result is weighted toward the pool's more popular, dated games.
+ *
+ * Owned and wishlisted games are left out; the wishlist has its own entries.
+ */
+export async function fetchUpcomingForYou(
+  steamId: string,
+  apiKey: string,
+  fetchImpl: typeof fetch = fetch,
+  options: { limit?: number } = {},
+): Promise<RecommendedGame[]> {
+  const owned = await fetchOwnedGames(steamId, apiKey, fetchImpl);
+  const weightOf = (g: OwnedGame) =>
+    Math.log2(1 + (g.playtime_forever ?? 0) / 60) +
+    RECENT_BOOST * Math.log2(1 + (g.playtime_2weeks ?? 0) / 60);
+  const played = owned
+    .filter((g) => (g.playtime_forever ?? 0) >= 60 || (g.playtime_2weeks ?? 0) > 0)
+    .map((g) => ({ ...g, weight: weightOf(g) }))
+    .sort((a, b) => b.weight - a.weight)
+    .slice(0, 150);
+
+  const [playedTags, names, wishlist, pool] = await Promise.all([
+    fetchStoreTags(played.map((g) => g.appid), fetchImpl),
+    fetchTagNames(fetchImpl),
+    fetchWishlistAppids(steamId, apiKey, fetchImpl).catch(() => [] as number[]),
+    fetchComingSoonPool(fetchImpl),
+  ]);
+
+  const rank = (i: number) => (20 - Math.min(i, 19)) / 20;
+
+  const taste = new Map<number, number>();
+  for (const g of played) {
+    const weight = g.weight;
+    (playedTags[String(g.appid)] ?? []).forEach((tag, i) =>
+      taste.set(tag, (taste.get(tag) ?? 0) + weight * rank(i)),
+    );
+  }
+
+  // Pool order is Steam's popularity order; halve a game's weight every ~100 places.
+  const popularity = new Map(pool.map((item, i) => [item.appid, 1 / (1 + i / 100)]));
+  const isMeta = (tag: number) => META_TAGS.has(names[String(tag)] ?? "");
+
+  const df = new Map<number, number>();
+  for (const item of pool) for (const tag of item.tagids) df.set(tag, (df.get(tag) ?? 0) + 1);
+  const idf = (tag: number) => Math.log((pool.length + 1) / ((df.get(tag) ?? 0) + 1));
+
+  const skip = new Set([...owned.map((g) => g.appid), ...wishlist]);
+  const isAdult = (item: PoolItem) => item.tagids.some((tag) => ADULT_TAGS.has(names[String(tag)] ?? ""));
+  const scored = pool
+    .filter((item) => !skip.has(item.appid) && !isAdult(item))
+    .map((item) => {
+      const contributions = item.tagids.map((tag, i) => ({
+        tag,
+        value: isMeta(tag) ? 0 : (taste.get(tag) ?? 0) * idf(tag) * rank(i),
+      }));
+      const dated = releaseFrom(item.release).releaseDate > 0 ? 1.25 : 1;
+      return {
+        item,
+        score:
+          contributions.reduce((sum, c) => sum + c.value, 0) *
+          (popularity.get(item.appid) ?? 0) *
+          dated,
+        reasons: contributions
+          .filter((c) => c.value > 0)
+          .sort((a, b) => b.value - a.value)
+          .slice(0, 2)
+          .map((c) => names[String(c.tag)])
+          .filter(Boolean),
+      };
+    })
+    .filter((s) => s.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, options.limit ?? 30);
+
+  return scored.map(({ item, reasons }) => ({
+    appid: item.appid,
+    name: item.name,
+    ...releaseFrom(item.release),
+    reasons,
+  }));
+}
+
+interface PoolItem {
+  appid: number;
+  name: string;
+  tagids: number[];
+  release?: { steam_release_date?: number; coming_soon_display?: string };
+}
+
+/** Steam's most popular unreleased games (sort 11 is the store's popularity order). */
+async function fetchComingSoonPool(fetchImpl: typeof fetch, size = 400): Promise<PoolItem[]> {
+  const pages = Array.from({ length: Math.ceil(size / 100) }, (_, i) => i * 100);
+  const results = await mapLimit(pages, 4, async (start) => {
+    const input = {
+      query: {
+        start,
+        count: 100,
+        sort: 11,
+        filters: {
+          released_only: false,
+          coming_soon_only: true,
+          type_filters: { include_games: true },
+        },
+      },
+      context: { language: "english", country_code: "US" },
+      data_request: { include_basic_info: true, include_release: true, include_tag_count: 20 },
+    };
+    try {
+      const res = await fetchImpl(
+        `${STEAM_API}/IStoreQueryService/Query/v1/?input_json=${encodeURIComponent(JSON.stringify(input))}`,
+      );
+      if (!res.ok) return [];
+      const data = await res.json();
+      return ((data?.response?.store_items ?? []) as PoolItem[]).filter(
+        (item) => item?.appid && item.name && Array.isArray(item.tagids),
+      );
+    } catch {
+      return [];
+    }
+  });
+  const seen = new Set<number>();
+  return results.flat().filter((item) => !seen.has(item.appid) && seen.add(item.appid));
 }
 
 export interface NewsItem {

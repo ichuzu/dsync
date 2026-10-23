@@ -1,15 +1,12 @@
-import Card from "@mui/material/Card";
-import CardActionArea from "@mui/material/CardActionArea";
-import CardContent from "@mui/material/CardContent";
-import Box from "@mui/material/Box";
-import Typography from "@mui/material/Typography";
-import LinearProgress from "@mui/material/LinearProgress";
-import { Clock, Sparkles, CheckCircle2, RefreshCcw } from "lucide-react";
+import { Clock, Sparkles, RefreshCcw } from "lucide-react";
 import { Game, RarityBreakdown, completionPercentage, isPerfectGame } from "@/types/game";
 import { LAUNCHERS } from "@/lib/launchers";
 import { Logo } from "@/components/Logo";
+import { GameFrame, type FrameState } from "@/components/GameFrame";
+import { ProgressBar } from "@/components/ProgressBar";
 import { fetchSteamCover } from "@/lib/steamClient";
 import { getImageCandidates } from "@/lib/steamImage";
+import { cn } from "@/lib/utils";
 import gamePlaceholder from "@/assets/game-placeholder.jpg";
 
 interface GameCardProps {
@@ -17,311 +14,173 @@ interface GameCardProps {
   onClick: () => void;
   /** True only for the game the user is in right now (live presence). */
   live?: boolean;
+  /**
+   * Live download percentage (0-100). The orange download bar on the frame
+   * renders only while this is a number and scales to it; leave it undefined
+   * and the bar stays hidden.
+   */
+  downloadProgress?: number | null;
+  frameState?: FrameState;
 }
 
-const GOLD = "hsl(41, 92%, 56%)";
+/** Translucent backing for the pills overlaid on cover art (see --scrim). */
+const SCRIM = "bg-[hsl(var(--scrim)/0.6)] backdrop-blur-[6px]";
 
-export const GameCard = ({ game, onClick, live }: GameCardProps) => {
+export const GameCard = ({ game, onClick, live, downloadProgress, frameState = "idle" }: GameCardProps) => {
   const completion = completionPercentage(game);
   const perfect = isPerfectGame(game);
   const playing = Boolean(live);
   const launcher = LAUNCHERS[game.launcher];
 
-  // Landscape art (header.jpg first) with a resilient fallback chain: walk the
-  // CDN variants, then the server store lookup, then the local placeholder.
-  const artCandidates = getImageCandidates(game.id, "landscape");
+  // Portrait art (library_600x900.jpg first) with a resilient fallback chain:
+  // walk the CDN variants, then the server store lookup, then the placeholder.
+  const artCandidates = getImageCandidates(game.id, "portrait");
   const initialSrc = artCandidates[0] || game.coverImage || gamePlaceholder;
 
   return (
-    <Card
-      elevation={0}
-      sx={{
-        height: "100%",
-        position: "relative",
-        bgcolor: "background.paper",
-        border: "1px solid",
-        borderColor: "divider",
-        borderRadius: 3,
-        overflow: "hidden",
-        transition: "transform .3s ease, box-shadow .3s ease, border-color .3s ease",
-        "&:hover": {
-          transform: "translateY(-6px)",
-          borderColor: "primary.main",
-          boxShadow: "0 0 32px hsl(24 95% 53% / 0.35)",
-        },
-        "&:hover .cover-img": { transform: "scale(1.06)" },
-        "&:hover .hover-reveal": { opacity: 1 },
-      }}
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "group relative flex h-full w-full flex-col items-stretch bg-transparent text-left",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+        // Keep the artist's angular frame prominent without a second box or glow.
+        perfect
+          ? "[&:hover_.frame-piece]:bg-perfect"
+          : "[&:hover_.frame-piece]:bg-primary",
+      )}
     >
-      <CardActionArea
-        onClick={onClick}
-        sx={{
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "stretch",
-          height: "100%",
-        }}
-      >
-        {/* Cover */}
-        <Box sx={{ position: "relative", width: "100%", aspectRatio: "16 / 9", overflow: "hidden" }}>
-          <Box
-            component="img"
-            src={initialSrc}
-            alt={game.title}
-            className="cover-img"
-            loading="lazy"
-            onError={(e) => {
-              // Walk the CDN art variants, then the server store lookup (hashed
-              // assets for unreleased games), then the local placeholder.
-              const img = e.currentTarget as HTMLImageElement;
-              const next = Number(img.dataset.fb ?? "0") + 1;
-              if (next < artCandidates.length) {
-                img.dataset.fb = String(next);
-                img.src = artCandidates[next];
-              } else if (img.dataset.fb !== "store" && img.dataset.fb !== "placeholder") {
-                img.dataset.fb = "store";
-                fetchSteamCover(game.id)
-                  .then((url) => {
-                    img.src = url || gamePlaceholder;
-                  })
-                  .catch(() => {
-                    img.src = gamePlaceholder;
-                  });
-              } else if (img.dataset.fb !== "placeholder") {
-                img.dataset.fb = "placeholder";
-                img.src = gamePlaceholder;
-              }
-            }}
-            sx={{
-              display: "block",
-              width: "100%",
-              height: "100%",
-              objectFit: "cover",
-              transition: "transform .5s ease",
-            }}
-          />
+      {/* Cover */}
+      <div className="relative aspect-[2/3] w-full overflow-hidden bg-card">
+        <img
+          src={initialSrc}
+          alt={game.title}
+          loading="lazy"
+          onError={(e) => {
+            // Walk the CDN art variants, then the server store lookup (hashed
+            // assets for unreleased games), then the local placeholder.
+            const img = e.currentTarget;
+            const next = Number(img.dataset.fb ?? "0") + 1;
+            if (next < artCandidates.length) {
+              img.dataset.fb = String(next);
+              img.src = artCandidates[next];
+            } else if (img.dataset.fb !== "store" && img.dataset.fb !== "placeholder") {
+              img.dataset.fb = "store";
+              fetchSteamCover(game.id)
+                .then((url) => {
+                  img.src = url || gamePlaceholder;
+                })
+                .catch(() => {
+                  img.src = gamePlaceholder;
+                });
+            } else if (img.dataset.fb !== "placeholder") {
+              img.dataset.fb = "placeholder";
+              img.src = gamePlaceholder;
+            }
+          }}
+          className="block h-full w-full object-cover p-[6px]"
+        />
 
-          {/* Base gradient so the title is always legible */}
-          <Box
-            sx={{
-              position: "absolute",
-              inset: 0,
-              background:
-                "linear-gradient(to top, hsl(24 8% 10%) 0%, hsl(24 8% 10% / 0.15) 45%, transparent 70%)",
-            }}
-          />
+        {/* Hover reveal — label only, no tint over the art */}
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-300 group-hover:opacity-100">
+          <span className="rounded-md bg-[hsl(var(--scrim)/0.72)] px-2.5 py-1 text-xs font-bold text-primary backdrop-blur-[6px]">
+            View details →
+          </span>
+        </div>
 
-          {/* Hover reveal */}
-          <Box
-            className="hover-reveal"
-            sx={{
-              position: "absolute",
-              inset: 0,
-              opacity: 0,
-              transition: "opacity .3s ease",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              background: "hsl(20 12% 4% / 0.45)",
-            }}
-          >
-            <Typography variant="caption" sx={{ fontWeight: 700, color: "primary.main" }}>
-              View details →
-            </Typography>
-          </Box>
+        {/* Launcher pill */}
+        <div className={cn("absolute left-3 top-3 flex items-center gap-1.5 rounded-md px-2 py-1", SCRIM)}>
+          <Logo name={launcher.logoKey} alt={launcher.name} className="h-4 w-4 rounded-sm" />
+          <span className="text-xs font-semibold text-white">{launcher.name}</span>
+        </div>
 
-          {/* Launcher pill */}
-          <Box
-            sx={{
-              position: "absolute",
-              top: 12,
-              left: 12,
-              display: "flex",
-              alignItems: "center",
-              gap: 0.75,
-              px: 1,
-              py: 0.5,
-              borderRadius: 1.5,
-              bgcolor: "hsl(20 12% 4% / 0.6)",
-              backdropFilter: "blur(6px)",
-            }}
-          >
-            <Logo
-              name={launcher.logoKey}
-              alt={launcher.name}
-              className="h-4 w-4 rounded-sm"
-            />
-            <Typography variant="caption" sx={{ fontWeight: 600, color: "common.white" }}>
-              {launcher.name}
-            </Typography>
-          </Box>
-
-          {/* Perfect + sync */}
-          <Box
-            sx={{
-              position: "absolute",
-              top: 12,
-              right: 12,
-              display: "flex",
-              alignItems: "center",
-              gap: 0.75,
-            }}
-          >
-            {playing && (
-              <Box
-                sx={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 0.5,
-                  px: 1,
-                  py: 0.5,
-                  borderRadius: 1.5,
-                  bgcolor: "hsl(142 66% 45% / 0.2)",
-                  color: "hsl(142 66% 45%)",
-                  backdropFilter: "blur(6px)",
-                }}
-              >
-                <Box
-                  className="animate-pulse"
-                  sx={{ width: 6, height: 6, borderRadius: "50%", bgcolor: "hsl(142 66% 45%)" }}
-                />
-                <Typography variant="caption" sx={{ fontWeight: 700, fontSize: 11 }}>
-                  Playing
-                </Typography>
-              </Box>
-            )}
-            {perfect && (
-              <Box
-                sx={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 0.5,
-                  px: 1,
-                  py: 0.5,
-                  borderRadius: 1.5,
-                  bgcolor: "hsl(41 92% 56% / 0.2)",
-                  color: GOLD,
-                  backdropFilter: "blur(6px)",
-                }}
-              >
-                <Sparkles size={12} />
-                <Typography variant="caption" sx={{ fontWeight: 700, fontSize: 11 }}>
-                  Perfect
-                </Typography>
-              </Box>
-            )}
-            {/* Only flag games that still need syncing — synced is the norm. */}
-            {!game.synced && (
-              <Box
-                title="Sync pending"
-                sx={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  width: 24,
-                  height: 24,
-                  borderRadius: "50%",
-                  backdropFilter: "blur(6px)",
-                  bgcolor: "hsl(38 92% 50% / 0.2)",
-                  color: "hsl(38 92% 50%)",
-                }}
-              >
-                <RefreshCcw size={14} />
-              </Box>
-            )}
-          </Box>
-
-          {/* Title */}
-          <Box sx={{ position: "absolute", left: 0, right: 0, bottom: 0, p: 1.5 }}>
-            <Typography noWrap sx={{ fontWeight: 600, color: "text.primary" }}>
-              {game.title}
-            </Typography>
-            <Box sx={{ display: "flex", alignItems: "center", gap: 1, color: "text.secondary" }}>
-              {game.genre && (
-                <>
-                  <Typography variant="caption">{game.genre}</Typography>
-                  <Box
-                    component="span"
-                    sx={{ width: 3, height: 3, borderRadius: "50%", bgcolor: "currentColor" }}
-                  />
-                </>
-              )}
-              <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-                <Clock size={12} />
-                <Typography variant="caption">{game.playtimeHours}h</Typography>
-              </Box>
-            </Box>
-          </Box>
-        </Box>
-
-        {/* Stats */}
-        <CardContent sx={{ width: "100%", p: 2, "&:last-child": { pb: 2 } }}>
-          <Box sx={{ display: "flex", justifyContent: "space-between", mb: 1 }}>
-            <Typography variant="body2" color="text.secondary">
-              Achievements
-            </Typography>
-            <Typography variant="body2" sx={{ fontWeight: 600 }}>
-              {game.earnedAchievements}/{game.totalAchievements}
-            </Typography>
-          </Box>
-
-          <LinearProgress
-            variant="determinate"
-            value={completion}
-            sx={{
-              height: 8,
-              borderRadius: 5,
-              bgcolor: "hsl(24 7% 14%)",
-              "& .MuiLinearProgress-bar": {
-                borderRadius: 5,
-                backgroundColor: perfect ? GOLD : "primary.main",
-              },
-            }}
-          />
-
-          <Box
-            sx={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              mt: 1.25,
-            }}
-          >
-            <RarityDots breakdown={game.rarityBreakdown} />
-            <Typography
-              variant="body2"
-              sx={{ fontWeight: 700, color: perfect ? GOLD : "text.primary" }}
+        {/* Perfect + sync */}
+        <div className="absolute right-5 top-5 flex items-center gap-1.5">
+          {playing && (
+            <div className="flex items-center gap-1 rounded-md bg-success/20 px-2 py-1 text-success backdrop-blur-[6px]">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-success" />
+              <span className="text-[11px] font-bold">Playing</span>
+            </div>
+          )}
+          {perfect && (
+            <div className="flex items-center gap-1 rounded-md bg-perfect/20 px-2 py-1 text-perfect backdrop-blur-[6px]">
+              <Sparkles size={12} />
+              <span className="text-[11px] font-bold">Perfect</span>
+            </div>
+          )}
+          {/* Only flag games that still need syncing — synced is the norm. */}
+          {!game.synced && (
+            <div
+              title="Sync pending"
+              className="flex h-6 w-6 items-center justify-center rounded-full bg-warning/20 text-warning backdrop-blur-[6px]"
             >
-              {completion.toFixed(0)}%
-            </Typography>
-          </Box>
-        </CardContent>
-      </CardActionArea>
-    </Card>
+              <RefreshCcw size={14} />
+            </div>
+          )}
+        </div>
+
+        {/* HUD frame */}
+        <GameFrame
+          state={playing ? "play" : frameState}
+          downloadProgress={downloadProgress}
+          color={perfect ? "hsl(var(--perfect) / 0.85)" : "hsl(var(--foreground) / 0.8)"}
+          gap={7}
+        />
+      </div>
+
+      {/* Stats */}
+      <div className="w-full px-1 py-4">
+        <p className="truncate font-semibold text-foreground">{game.title}</p>
+        <div className="mb-3 flex items-center gap-2 text-muted-foreground">
+          {game.genre && (
+            <>
+              <span className="truncate text-xs">{game.genre}</span>
+              <span className="h-[3px] w-[3px] shrink-0 rounded-full bg-current" />
+            </>
+          )}
+          <span className="flex shrink-0 items-center gap-1">
+            <Clock size={12} />
+            <span className="text-xs">{game.playtimeHours}h</span>
+          </span>
+        </div>
+
+        <div className="mb-2 flex justify-between text-sm">
+          <span className="text-muted-foreground">Achievements</span>
+          <span className="font-semibold">
+            {game.earnedAchievements}/{game.totalAchievements}
+          </span>
+        </div>
+
+        <ProgressBar
+          value={completion}
+          label={`${game.title} achievement completion`}
+          barClassName={perfect ? "bg-perfect" : undefined}
+        />
+
+        <div className="mt-2.5 flex items-center justify-between">
+          <RarityDots breakdown={game.rarityBreakdown} />
+          <span className={cn("text-sm font-bold", perfect ? "text-perfect" : "text-foreground")}>
+            {completion.toFixed(0)}%
+          </span>
+        </div>
+      </div>
+    </button>
   );
 };
 
-const RarityDots = ({ breakdown }: { breakdown: RarityBreakdown }) => {
-  const tiers: Array<{ key: keyof RarityBreakdown; color: string; label: string }> = [
-    { key: "legendary", color: "hsl(41, 92%, 56%)", label: "Legendary" },
-    { key: "epic", color: "hsl(270, 70%, 65%)", label: "Epic" },
-    { key: "rare", color: "hsl(205, 80%, 58%)", label: "Rare" },
-  ];
+const TIERS: Array<{ key: keyof RarityBreakdown; dot: string; label: string }> = [
+  { key: "legendary", dot: "bg-rarity-legendary", label: "Legendary" },
+  { key: "epic", dot: "bg-rarity-epic", label: "Epic" },
+  { key: "rare", dot: "bg-rarity-rare", label: "Rare" },
+];
 
-  return (
-    <Box sx={{ display: "flex", gap: 1 }}>
-      {tiers.map((t) => (
-        <Box
-          key={t.key}
-          title={`${breakdown[t.key]} ${t.label}`}
-          sx={{ display: "flex", alignItems: "center", gap: 0.5 }}
-        >
-          <Box sx={{ width: 8, height: 8, borderRadius: "50%", bgcolor: t.color }} />
-          <Typography variant="caption" color="text.secondary">
-            {breakdown[t.key]}
-          </Typography>
-        </Box>
-      ))}
-    </Box>
-  );
-};
+const RarityDots = ({ breakdown }: { breakdown: RarityBreakdown }) => (
+  <div className="flex gap-2">
+    {TIERS.map((t) => (
+      <span key={t.key} title={`${breakdown[t.key]} ${t.label}`} className="flex items-center gap-1">
+        <span className={cn("h-2 w-2 rounded-full", t.dot)} />
+        <span className="text-xs text-muted-foreground">{breakdown[t.key]}</span>
+      </span>
+    ))}
+  </div>
+);

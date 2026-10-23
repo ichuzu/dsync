@@ -27,3 +27,9 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Electron build output
+release
+dist-electron
+# Inkscape autosave backups
+public/logos/*.svg.*.svg

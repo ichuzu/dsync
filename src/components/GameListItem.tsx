@@ -1,14 +1,11 @@
-import Box from "@mui/material/Box";
-import Typography from "@mui/material/Typography";
-import LinearProgress from "@mui/material/LinearProgress";
 import { Clock, Sparkles, ChevronRight } from "lucide-react";
 import { Game, completionPercentage, isPerfectGame } from "@/types/game";
 import { LAUNCHERS } from "@/lib/launchers";
 import { Logo } from "@/components/Logo";
+import { ProgressBar } from "@/components/ProgressBar";
 import { getImageCandidates } from "@/lib/steamImage";
+import { cn } from "@/lib/utils";
 import gamePlaceholder from "@/assets/game-placeholder.jpg";
-
-const GOLD = "hsl(41, 92%, 56%)";
 
 interface GameListItemProps {
   game: Game;
@@ -27,32 +24,19 @@ export const GameListItem = ({ game, onClick, live }: GameListItemProps) => {
   const initialSrc = artCandidates[0] || game.coverImage || gamePlaceholder;
 
   return (
-    <Box
+    <div
       onClick={onClick}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && onClick()}
-      sx={{
-        display: "flex",
-        alignItems: "center",
-        gap: 1.5,
-        p: 1.25,
-        borderRadius: 2,
-        border: "1px solid",
-        borderColor: "divider",
-        bgcolor: "background.paper",
-        cursor: "pointer",
-        transition: "border-color .2s ease, background-color .2s ease",
-        "&:hover": { borderColor: "primary.main", bgcolor: "hsl(24 8% 12%)" },
-      }}
+      className="flex cursor-pointer items-center gap-3 rounded-lg border border-border bg-card p-2.5 transition-colors duration-200 hover:border-primary hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
-      <Box
-        component="img"
+      <img
         src={initialSrc}
         alt={game.title}
         loading="lazy"
         onError={(e) => {
-          const img = e.currentTarget as HTMLImageElement;
+          const img = e.currentTarget;
           const next = Number(img.dataset.fb ?? "0") + 1;
           if (next < artCandidates.length) {
             img.dataset.fb = String(next);
@@ -62,69 +46,45 @@ export const GameListItem = ({ game, onClick, live }: GameListItemProps) => {
             img.src = gamePlaceholder;
           }
         }}
-        sx={{
-          width: 44,
-          height: 58,
-          flexShrink: 0,
-          objectFit: "cover",
-          borderRadius: 1,
-        }}
+        className="h-[58px] w-11 shrink-0 rounded-md object-cover"
       />
 
-      <Box sx={{ minWidth: 0, flex: 1 }}>
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
           <Logo name={launcher.logoKey} alt={launcher.name} className="h-3.5 w-3.5 rounded-sm" />
           {playing && (
-            <Box
-              className="animate-pulse"
-              sx={{
-                width: 7,
-                height: 7,
-                flexShrink: 0,
-                borderRadius: "50%",
-                bgcolor: "hsl(142 66% 45%)",
-              }}
+            <span
               title="Currently playing"
+              className="h-[7px] w-[7px] shrink-0 animate-pulse rounded-full bg-success"
             />
           )}
-          <Typography noWrap sx={{ fontWeight: 600 }}>
-            {game.title}
-          </Typography>
-          {perfect && <Sparkles size={13} color={GOLD} />}
-        </Box>
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1, mt: 0.5 }}>
-          <LinearProgress
-            variant="determinate"
+          <p className="truncate font-semibold">{game.title}</p>
+          {perfect && <Sparkles size={13} className="shrink-0 text-perfect" />}
+        </div>
+        <div className="mt-1 flex items-center gap-2">
+          <ProgressBar
             value={completion}
-            sx={{
-              flex: 1,
-              maxWidth: 220,
-              height: 6,
-              borderRadius: 3,
-              bgcolor: "hsl(24 7% 14%)",
-              "& .MuiLinearProgress-bar": {
-                borderRadius: 3,
-                backgroundColor: perfect ? GOLD : "primary.main",
-              },
-            }}
+            label={`${game.title} achievement completion`}
+            className="h-1.5 max-w-[220px] flex-1"
+            barClassName={perfect ? "bg-perfect" : undefined}
           />
-          <Typography variant="caption" sx={{ color: "text.secondary", whiteSpace: "nowrap" }}>
+          <span className="whitespace-nowrap text-xs text-muted-foreground">
             {game.earnedAchievements}/{game.totalAchievements}
-          </Typography>
-        </Box>
-      </Box>
+          </span>
+        </div>
+      </div>
 
-      <Box sx={{ textAlign: "right", flexShrink: 0, display: { xs: "none", sm: "block" } }}>
-        <Typography sx={{ fontWeight: 700, color: perfect ? GOLD : "text.primary" }}>
+      <div className="hidden shrink-0 text-right sm:block">
+        <p className={cn("font-bold", perfect ? "text-perfect" : "text-foreground")}>
           {completion.toFixed(0)}%
-        </Typography>
-        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 0.5, color: "text.secondary" }}>
+        </p>
+        <div className="flex items-center justify-end gap-1 text-muted-foreground">
           <Clock size={12} />
-          <Typography variant="caption">{game.playtimeHours}h</Typography>
-        </Box>
-      </Box>
+          <span className="text-xs">{game.playtimeHours}h</span>
+        </div>
+      </div>
 
       <ChevronRight size={18} className="shrink-0 text-muted-foreground" />
-    </Box>
+    </div>
   );
 };

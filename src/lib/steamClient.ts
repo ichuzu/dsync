@@ -1,6 +1,10 @@
 import type { Achievement, Game } from "@/types/game";
+import type { HltbTimes } from "@/lib/hltb";
+import type { FoundWiki } from "@/lib/wikiFinder";
 import type {
   LibraryStats,
+  LibraryTags,
+  RecommendedGame,
   NewsItem,
   SteamPresence,
   SteamProfile,
@@ -112,6 +116,44 @@ export async function fetchSteamPresence(steamId: string): Promise<SteamPresence
   return asJson(res);
 }
 
+/**
+ * HowLongToBeat times for a title, or null when HLTB has no close match.
+ * Throws on rate limiting (429) so the caller retries later instead of
+ * remembering a miss.
+ */
+export async function fetchHltb(title: string): Promise<HltbTimes | null> {
+  const res = await fetch(`${BASE}/hltb?title=${encodeURIComponent(title)}`);
+  const { times } = await asJson(res);
+  return times ?? null;
+}
+
+/** The community wiki for a game, or null if none was found. */
+export async function fetchFindWiki(appid: string, title: string): Promise<FoundWiki | null> {
+  const res = await fetch(`${BASE}/wikifind?appid=${encodeURIComponent(appid)}&title=${encodeURIComponent(title)}`);
+  const { wiki } = await asJson(res);
+  return wiki ?? null;
+}
+
+/** Checks a wiki address the user typed; null if it isn't a MediaWiki. */
+export async function fetchProbeWiki(url: string): Promise<FoundWiki | null> {
+  const res = await fetch(`${BASE}/wikiprobe?url=${encodeURIComponent(url)}`);
+  const { wiki } = await asJson(res);
+  return wiki ?? null;
+}
+
+/** Upcoming games picked from what the player plays. */
+export async function fetchSteamForYou(steamId: string): Promise<RecommendedGame[]> {
+  const res = await fetch(`${BASE}/foryou?steamid=${encodeURIComponent(steamId)}`);
+  const { games } = await asJson(res);
+  return games ?? [];
+}
+
+/** Store tags for every owned game, for evaluating dynamic collections. */
+export async function fetchSteamLibraryTags(steamId: string): Promise<LibraryTags> {
+  const res = await fetch(`${BASE}/tags?steamid=${encodeURIComponent(steamId)}`);
+  return asJson(res);
+}
+
 export async function fetchSteamCover(appid: string): Promise<string | null> {
   try {
     const res = await fetch(`${BASE}/cover?appid=${encodeURIComponent(appid)}`);
@@ -125,9 +167,10 @@ export async function fetchSteamCover(appid: string): Promise<string | null> {
 export async function fetchSteamAchievements(
   steamId: string,
   appid: string,
+  options: { fresh?: boolean } = {},
 ): Promise<Achievement[]> {
   const res = await fetch(
-    `${BASE}/achievements?steamid=${encodeURIComponent(steamId)}&appid=${encodeURIComponent(appid)}`,
+    `${BASE}/achievements?steamid=${encodeURIComponent(steamId)}&appid=${encodeURIComponent(appid)}${options.fresh ? "&fresh=1" : ""}`,
   );
   const { achievements } = await asJson(res);
   return achievements ?? [];
