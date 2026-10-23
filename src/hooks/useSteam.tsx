@@ -69,7 +69,11 @@ interface SteamContextValue {
   refresh: () => void;
 }
 
-import { signInWithSteam } from "@/lib/desktop";
+import { fetchNonSteamArtwork, getNonSteamGames, signInWithSteam } from "@/lib/desktop";
+import { onCustomAchievementsChanged, readCustomAchievements } from "@/lib/customAchievements";
+
+/** Non-Steam games already tried for artwork this session, so a miss isn't retried on every sync. */
+const artworkTried = new Set<string>();
 
 const SESSION_KEY = "dsync.steam.session";
 const libraryKey = (steamId: string) => `dsync.steam.library.${steamId}`;
@@ -591,17 +595,77 @@ export const SteamProvider = ({ children }: { children: ReactNode }) => {
   // accurate earned/total for every game, so fold those in (without an extra
   // API call) so every card shows real progress. Only fill gaps — keep the
   // richer top-game data (which also carries the rarity breakdown).
+  // Non-Steam games added to Steam (desktop only), read from Steam's files
+  // whenever the library syncs.
+  const [nonSteam, setNonSteam] = useState<Game[]>([]);
+  useEffect(() => {
+    if (!steamId) return setNonSteam([]);
+    let cancelled = false;
+    const load = () => getNonSteamGames(steamId).then((games) => {
+      if (cancelled) return games;
+      setNonSteam(
+        games.map((g) => ({
+          id: g.appid,
+          title: g.name,
+          genre: "Non-Steam",
+          launcher: "steam" as const,
+          coverImage: g.image ?? "",
+          earnedAchievements: 0,
+          totalAchievements: 0,
+          playtimeHours: 0,
+          rarityBreakdown: { common: 0, uncommon: 0, rare: 0, epic: 0, legendary: 0 },
+          // YYYY-MM-DD in local time, like Steam games' last-played dates.
+          lastPlayed: g.lastPlayed ? new Date(g.lastPlayed * 1000).toLocaleDateString("en-CA") : undefined,
+          // Nothing to sync: Steam keeps no achievements or playtime for these.
+          synced: true,
+          nonSteam: true,
+          launchId: g.launchId,
+        })),
+      );
+      return games;
+    });
+    // Games with no cover or banner in Steam get artwork fetched and saved
+    // once (existing art is never replaced here), then the list reloads.
+    void load().then(async (games) => {
+      let added = false;
+      for (const g of games.filter((x) => !x.hasArtwork)) {
+        if (cancelled || artworkTried.has(g.appid)) continue;
+        artworkTried.add(g.appid);
+        const result = await fetchNonSteamArtwork(g.appid);
+        if (result?.saved.length) added = true;
+      }
+      if (added && !cancelled) void load();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [steamId, lastSynced]);
+
+  // Bumped when the player edits their own achievements for a non-Steam game.
+  const [customVersion, setCustomVersion] = useState(0);
+  useEffect(() => onCustomAchievementsChanged(() => setCustomVersion((v) => v + 1)), []);
+
   const mergedLibrary = useMemo(() => {
     const perGame = libraryStats?.perGame;
-    if (!perGame) return library;
-    return library.map((g) => {
-      const s = perGame[g.id];
-      if (s && s.total > 0 && g.totalAchievements === 0) {
-        return { ...g, earnedAchievements: s.earned, totalAchievements: s.total };
-      }
-      return g;
+    const steamGames = !perGame
+      ? library
+      : library.map((g) => {
+          const s = perGame[g.id];
+          if (s && s.total > 0 && g.totalAchievements === 0) {
+            return { ...g, earnedAchievements: s.earned, totalAchievements: s.total };
+          }
+          return g;
+        });
+    if (!nonSteam.length) return steamGames;
+    // Progress for non-Steam games is the player's own achievement list.
+    const withProgress = nonSteam.map((g) => {
+      const own = readCustomAchievements(g.id);
+      return own.length
+        ? { ...g, earnedAchievements: own.filter((a) => a.unlocked).length, totalAchievements: own.length }
+        : g;
     });
-  }, [library, libraryStats]);
+    return [...steamGames, ...withProgress];
+  }, [library, libraryStats, nonSteam, customVersion]);
 
   const value: SteamContextValue = {
     connected: Boolean(session),

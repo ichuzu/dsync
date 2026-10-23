@@ -13,8 +13,9 @@ export function getImageCandidates(
   shape: CoverShape = "landscape",
 ): string[] {
   const id = String(appid);
-  // Non-numeric ids aren't Steam apps (e.g. demo data) — no CDN art to try.
-  if (!/^\d+$/.test(id)) return [];
+  // Non-numeric ids aren't Steam apps (e.g. demo data), and ids with the high
+  // bit set are non-Steam shortcuts — no CDN art to try for either.
+  if (!/^\d+$/.test(id) || Number(id) > 0x7fffffff) return [];
   const landscape = [
     `${CDN}/${id}/header.jpg`,
     `${CDN}/${id}/capsule_616x353.jpg`,

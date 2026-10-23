@@ -60,6 +60,7 @@ const comparators: Record<SortKey, (a: BacklogProgress, b: BacklogProgress) => n
 };
 
 const LAST_COLLECTION_KEY = "dsync.backlog.collection";
+const ALL_COLLECTIONS = "__all__";
 const GOAL_KEY = "dsync.backlog.goal";
 
 const GOALS: Array<{ key: BacklogGoal; label: string }> = [
@@ -97,27 +98,36 @@ const Backlog = () => {
       return null;
     }
   });
-  const collection =
-    collections.find((c) => c.id === collectionId) ??
-    collections.find((c) => c.name.toLowerCase() === "backlog") ??
-    null;
+  // "All collections" shows every collected game at once, each listed once.
+  const showAll = collectionId === ALL_COLLECTIONS && collections.length > 0;
+  const collection = showAll
+    ? null
+    : collections.find((c) => c.id === collectionId) ??
+      collections.find((c) => c.name.toLowerCase() === "backlog") ??
+      null;
 
   useEffect(() => {
-    if (!collection) return;
+    const id = showAll ? ALL_COLLECTIONS : collection?.id;
+    if (!id) return;
     try {
-      localStorage.setItem(LAST_COLLECTION_KEY, collection.id);
+      localStorage.setItem(LAST_COLLECTION_KEY, id);
     } catch {
       /* ignore */
     }
-  }, [collection]);
+  }, [collection, showAll]);
+
+  const gameIds = useMemo(
+    () => (showAll ? [...new Set(collections.flatMap((c) => c.gameIds))] : collection?.gameIds ?? []),
+    [showAll, collections, collection],
+  );
 
   const byId = useMemo(() => new Map(steam.library.map((g) => [g.id, g])), [steam.library]);
 
   const games = useMemo(
-    () => (collection?.gameIds ?? []).map((id) => byId.get(id)).filter((g): g is Game => Boolean(g)),
-    [collection, byId],
+    () => gameIds.map((id) => byId.get(id)).filter((g): g is Game => Boolean(g)),
+    [gameIds, byId],
   );
-  const missing = (collection?.gameIds.length ?? 0) - games.length;
+  const missing = gameIds.length - games.length;
   const hltb = useHltb(games);
 
   const rows = useMemo(() => {
@@ -156,11 +166,14 @@ const Backlog = () => {
           </div>
 
           {collections.length > 0 && (
-            <Select value={collection?.id ?? ""} onValueChange={setCollectionId}>
+            <Select value={showAll ? ALL_COLLECTIONS : collection?.id ?? ""} onValueChange={setCollectionId}>
               <SelectTrigger className="w-48" aria-label="Collection">
                 <SelectValue placeholder="Pick a collection" />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value={ALL_COLLECTIONS}>
+                  All collections ({new Set(collections.flatMap((c) => c.gameIds)).size})
+                </SelectItem>
                 {collections.map((c) => (
                   <SelectItem key={c.id} value={c.id}>
                     {c.name} ({c.gameIds.length})
@@ -183,7 +196,7 @@ const Backlog = () => {
             title="Sign in with Steam first"
             body="Progress and time left come from your Steam achievements and playtime."
           />
-        ) : !collection ? (
+        ) : !collection && !showAll ? (
           <Empty
             title="No backlog yet"
             body={
@@ -261,8 +274,8 @@ const Backlog = () => {
               )}
               {missing > 0 && (
                 <span className="ml-auto text-xs text-muted-foreground">
-                  {missing} game{missing === 1 ? "" : "s"} in this collection aren't in your
-                  Steam library
+                  {missing === 1 ? "1 game" : `${missing} games`} in {showAll ? "your collections" : "this collection"}{" "}
+                  {missing === 1 ? "isn't" : "aren't"} in your Steam library
                 </span>
               )}
             </div>
@@ -278,7 +291,8 @@ const Backlog = () => {
                     progress={progress}
                     hltbUrl={hltbUrl}
                     onOpen={() => setSelected(game)}
-                    onRemove={() => toggleGame(collection.id, game.id)}
+                    inCollections={showAll ? collections.filter((c) => c.gameIds.includes(game.id)).map((c) => c.name) : undefined}
+                    onRemove={collection ? () => toggleGame(collection.id, game.id) : undefined}
                   />
                 ))}
               </ul>
@@ -312,12 +326,16 @@ const BacklogRow = ({
   hltbUrl,
   onOpen,
   onRemove,
+  inCollections,
 }: {
   game: Game;
   progress: BacklogProgress;
   hltbUrl?: string;
   onOpen: () => void;
-  onRemove: () => void;
+  /** Absent in the all-collections view, where "remove from which?" is unclear. */
+  onRemove?: () => void;
+  /** Collection names, shown in the all-collections view. */
+  inCollections?: string[];
 }) => (
   <li className="flex items-center gap-3 px-3 py-2.5 transition-colors hover:bg-muted/40">
     <button
@@ -341,6 +359,11 @@ const BacklogRow = ({
               100%
             </span>
           )}
+          {inCollections?.map((name) => (
+            <span key={name} className="hidden shrink-0 rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground md:inline">
+              {name}
+            </span>
+          ))}
         </div>
 
         {progress.percent != null ? (
@@ -397,16 +420,18 @@ const BacklogRow = ({
       )}
     </div>
 
-    <Button
-      variant="ghost"
-      size="icon"
-      className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
-      onClick={onRemove}
-      aria-label={`Remove ${game.title} from this collection`}
-      title="Remove from this collection"
-    >
-      <Trash2 className="h-4 w-4" />
-    </Button>
+    {onRemove && (
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+        onClick={onRemove}
+        aria-label={`Remove ${game.title} from this collection`}
+        title="Remove from this collection"
+      >
+        <Trash2 className="h-4 w-4" />
+      </Button>
+    )}
   </li>
 );
 

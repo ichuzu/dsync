@@ -51,7 +51,7 @@ export const GameListItem = ({ game, onClick, live }: GameListItemProps) => {
 
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <Logo name={launcher.logoKey} alt={launcher.name} className="h-3.5 w-3.5 rounded-sm" />
+          <Logo name={launcher.logoKey} alt={game.nonSteam ? "Non-Steam" : launcher.name} className="h-3.5 w-3.5 rounded-sm" />
           {playing && (
             <span
               title="Currently playing"

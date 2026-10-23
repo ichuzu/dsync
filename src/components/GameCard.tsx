@@ -90,8 +90,8 @@ export const GameCard = ({ game, onClick, live, downloadProgress, frameState = "
 
         {/* Launcher pill */}
         <div className={cn("absolute left-3 top-3 flex items-center gap-1.5 rounded-md px-2 py-1", SCRIM)}>
-          <Logo name={launcher.logoKey} alt={launcher.name} className="h-4 w-4 rounded-sm" />
-          <span className="text-xs font-semibold text-white">{launcher.name}</span>
+          <Logo name={launcher.logoKey} alt={game.nonSteam ? "Non-Steam" : launcher.name} className="h-4 w-4 rounded-sm" />
+          <span className="text-xs font-semibold text-white">{game.nonSteam ? "Non-Steam" : launcher.name}</span>
         </div>
 
         {/* Perfect + sync */}

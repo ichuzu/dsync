@@ -52,6 +52,7 @@ const readStored = (): ThemeConfig => {
       "neutralHue",
       "neutralSat",
       "radius",
+      "angle",
     ] as const) {
       if (typeof merged[key] !== "number" || !Number.isFinite(merged[key])) {
         merged[key] = DEFAULT_THEME[key];
@@ -92,8 +93,10 @@ export const ThemeProvider = ({ children }: { children: ReactNode }) => {
     applyTokens(root, tokens);
     root.classList.toggle("dark", resolvedMode === "dark");
     root.classList.toggle("light", resolvedMode === "light");
+    // Angled corners swap rounding for a diagonal cut (see .chamfer in index.css).
+    root.classList.toggle("chamfer", (config.angle ?? 0) > 0);
     root.style.colorScheme = resolvedMode;
-  }, [tokens, resolvedMode]);
+  }, [tokens, resolvedMode, config.angle]);
 
   // The taskbar's own light/dark setting (desktop), else the OS colour scheme
   // (browser tab strip), so the icon's D can contrast with what it sits on.
@@ -114,7 +117,7 @@ export const ThemeProvider = ({ children }: { children: ReactNode }) => {
     // The overlay window shares this provider but must not repaint the app icon.
     if (window.location.pathname.startsWith("/overlay")) return;
     const timer = setTimeout(() => {
-      renderAppIcon(themePrimary(), taskbar === "light" ? "#111111" : "#ffffff")
+      renderAppIcon({ ink: taskbar === "light" ? "#111111" : "#ffffff", accent: themePrimary() })
         .then((png) => {
           // Browsers use the last icon link they find, so replace them all.
           document.querySelectorAll("link[rel~='icon']").forEach((el) => el.remove());

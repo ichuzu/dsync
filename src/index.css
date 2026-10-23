@@ -190,3 +190,27 @@
   padding: 0;
   font-size: inherit;
 }
+
+/* Angled corners (the theme's "Angles" slider): instead of rounding, the
+   top-left and bottom-right corners of surfaces are cut on a diagonal, like
+   the Dsync wordmark. --chamfer is the cut size; it is capped at 30% of the
+   element so small things (checkboxes, chips) keep their shape. Pills and
+   avatars (rounded-full) stay round. Focus rings are drawn outside the box,
+   so a focused element drops the cut rather than lose its ring. */
+html.chamfer :is(.rounded, .rounded-sm, .rounded-md, .rounded-lg, .rounded-xl, .rounded-2xl):not(:focus-visible) {
+  border-radius: 0;
+  clip-path: polygon(
+    min(var(--chamfer), 30%) 0,
+    100% 0,
+    100% calc(100% - min(var(--chamfer), 30%)),
+    calc(100% - min(var(--chamfer), 30%)) 100%,
+    0 100%,
+    0 min(var(--chamfer), 30%)
+  );
+}
+/* A clipped element paints in its own layer, which would cover icons
+   positioned over it (the magnifier in a search box), so lift those. */
+html.chamfer .relative > svg.absolute,
+html.chamfer .relative > button.absolute {
+  z-index: 1;
+}

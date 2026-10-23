@@ -141,6 +141,8 @@ export const DesktopSettings = () => {
           </p>
         </div>
 
+        <GridDbKey hasKey={settings?.hasSteamGridDbKey ?? false} patch={patch} />
+
         <Separator />
 
         <OverlaySettings settings={settings} patch={patch} />
@@ -172,6 +174,66 @@ export const DesktopSettings = () => {
         </div>
       </DialogContent>
     </Dialog>
+  );
+};
+
+/** Optional SteamGridDB key: artwork for non-Steam games that aren't on the Steam store. */
+const GridDbKey = ({
+  hasKey,
+  patch,
+}: {
+  hasKey: boolean;
+  patch: (change: Partial<DesktopSettingsType>) => Promise<void>;
+}) => {
+  const [value, setValue] = useState("");
+  const [saving, setSaving] = useState(false);
+  const save = async () => {
+    if (!value.trim()) return;
+    setSaving(true);
+    await patch({ steamGridDbKey: value.trim() });
+    setValue("");
+    setSaving(false);
+  };
+  return (
+    <div className="space-y-2">
+      <Label htmlFor="sgdb-key" className="flex items-center gap-2">
+        <KeyRound className="h-3.5 w-3.5" />
+        SteamGridDB key <span className="font-normal text-muted-foreground">(optional)</span>
+        {hasKey && (
+          <span className="ml-auto flex items-center gap-1 text-xs font-normal text-success">
+            <Check className="h-3.5 w-3.5" /> configured
+          </span>
+        )}
+      </Label>
+      <div className="flex gap-2">
+        <Input
+          id="sgdb-key"
+          type="password"
+          autoComplete="off"
+          spellCheck={false}
+          placeholder={hasKey ? "•••••••• (replace)" : "Paste your key"}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void save();
+          }}
+        />
+        <Button onClick={() => void save()} disabled={!value.trim() || saving}>
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
+        </Button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Covers and banners for non-Steam games that aren't on the Steam store (mods, emulators, other launchers).{" "}
+        <a
+          href="https://www.steamgriddb.com/profile/preferences/api"
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-1 text-primary hover:underline"
+        >
+          Get a free key <ExternalLink className="h-3 w-3" />
+        </a>
+      </p>
+    </div>
   );
 };
 

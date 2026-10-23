@@ -819,6 +819,27 @@ async function fetchComingSoonPool(fetchImpl: typeof fetch, size = 400): Promise
   return results.flat().filter((item) => !seen.has(item.appid) && seen.add(item.appid));
 }
 
+/**
+ * The image URL of the player's equipped profile background, or null.
+ * IPlayerService needs no key; animated backgrounds use their still frame.
+ * Served from Steam's Fastly CDN, which (unlike the Akamai one) sends CORS
+ * headers, so the renderer can read its pixels to theme the app.
+ */
+export async function fetchProfileBackground(
+  steamId: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string | null> {
+  try {
+    const res = await fetchImpl(`${STEAM_API}/IPlayerService/GetProfileItemsEquipped/v1/?steamid=${steamId}`);
+    if (!res.ok) return null;
+    const bg = (await res.json())?.response?.profile_background;
+    const path = bg?.image_large || bg?.image_small;
+    return path ? `https://shared.fastly.steamstatic.com/community_assets/images/${path}` : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface NewsItem {
   gid: string;
   appid: number;

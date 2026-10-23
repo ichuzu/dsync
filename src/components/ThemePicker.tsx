@@ -1,6 +1,6 @@
 import { useState } from "react";
 import * as SliderPrimitive from "@radix-ui/react-slider";
-import { Check, Monitor, Moon, Palette, RotateCcw, Sun } from "lucide-react";
+import { Check, Loader2, Monitor, Moon, Palette, RotateCcw, Sun, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
@@ -15,6 +15,9 @@ import {
 import { useTheme } from "@/theme/ThemeProvider";
 import type { ThemeMode } from "@/theme/tokens";
 import { cn } from "@/lib/utils";
+import { useSteam } from "@/hooks/useSteam";
+import { fetchSteamProfileBackground } from "@/lib/steamClient";
+import { colorsFromImages } from "@/lib/profileColors";
 
 const MODES: Array<{ value: ThemeMode; label: string; icon: typeof Sun }> = [
   { value: "light", label: "Light", icon: Sun },
@@ -125,6 +128,29 @@ const PaletteSwatch = ({
 export const ThemePicker = () => {
   const { config, setConfig, reset, resolvedMode } = useTheme();
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const steam = useSteam();
+  const [matching, setMatching] = useState(false);
+  const [matchNotice, setMatchNotice] = useState("");
+
+  /** Theme colours from the Steam avatar (weighted double) and profile background. */
+  const matchProfile = async () => {
+    const steamId = steam.profile?.steamId;
+    if (!steamId || !steam.profile?.avatar) return;
+    setMatching(true);
+    setMatchNotice("");
+    const background = await fetchSteamProfileBackground(steamId);
+    const colors = await colorsFromImages(
+      [steam.profile.avatar, background].filter((u): u is string => Boolean(u)),
+      [2, 1],
+    );
+    setMatching(false);
+    if (!colors) {
+      setMatchNotice("Couldn't read your profile pictures. Try again in a moment.");
+      return;
+    }
+    setConfig({ presetId: "steam-profile", ...colors });
+    setMatchNotice(background ? "Matched your avatar and profile background." : "Matched your avatar.");
+  };
 
   const activePalette = PALETTES.find((p) => matchesPalette(config, p));
 
@@ -149,7 +175,7 @@ export const ThemePicker = () => {
           <div>
             <h3 className="text-sm font-semibold text-foreground">Appearance</h3>
             <p className="text-xs text-muted-foreground">
-              {activePalette ? activePalette.name : "Custom"} &middot; {resolvedMode}
+              {activePalette ? activePalette.name : config.presetId === "steam-profile" ? "Your Steam profile" : "Custom"} &middot; {resolvedMode}
             </p>
           </div>
           <Button
@@ -189,6 +215,44 @@ export const ThemePicker = () => {
         </div>
 
         <Separator />
+
+        {/* Colours taken from the player's own Steam profile */}
+        {steam.connected && steam.profile?.avatar && (
+          <>
+            <div className="px-3 py-3">
+              <button
+                type="button"
+                onClick={() => void matchProfile()}
+                disabled={matching}
+                className={cn(
+                  "flex w-full items-center gap-3 rounded-lg border px-2.5 py-2 text-left transition-colors",
+                  config.presetId === "steam-profile"
+                    ? "border-primary/70 bg-primary/10"
+                    : "border-border hover:border-primary/50 hover:bg-muted/60",
+                )}
+              >
+                <img src={steam.profile.avatar} alt="" className="h-9 w-9 shrink-0 rounded-md" />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-xs font-semibold text-foreground">Match my Steam profile</span>
+                  <span className="block text-[11px] leading-snug text-muted-foreground">
+                    Colours from your avatar and profile background
+                  </span>
+                </span>
+                {matching ? (
+                  <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+                ) : (
+                  <Wand2 className="h-4 w-4 shrink-0 text-primary" />
+                )}
+              </button>
+              {matchNotice && (
+                <p className="px-1 pt-1.5 text-[11px] text-muted-foreground" role="status">
+                  {matchNotice}
+                </p>
+              )}
+            </div>
+            <Separator />
+          </>
+        )}
 
         {/* Preset palettes */}
         <div className="space-y-3 px-3 py-3">
@@ -276,6 +340,16 @@ export const ThemePicker = () => {
                 suffix="rem"
                 trackImage="linear-gradient(to right, hsl(var(--muted)), hsl(var(--secondary)))"
                 onChange={(radius) => setConfig({ presetId: "custom", radius })}
+              />
+              <TrackSlider
+                label="Angles"
+                value={config.angle ?? 0}
+                min={0}
+                max={20}
+                step={1}
+                suffix="px"
+                trackImage="linear-gradient(to right, hsl(var(--muted)), hsl(var(--secondary)))"
+                onChange={(angle) => setConfig({ angle })}
               />
             </div>
           )}

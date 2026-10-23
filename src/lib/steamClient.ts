@@ -1,6 +1,7 @@
 import type { Achievement, Game } from "@/types/game";
 import type { HltbTimes } from "@/lib/hltb";
 import type { FoundWiki } from "@/lib/wikiFinder";
+import type { GuideTip } from "@/lib/achievementGuides";
 import type {
   LibraryStats,
   LibraryTags,
@@ -139,6 +140,23 @@ export async function fetchProbeWiki(url: string): Promise<FoundWiki | null> {
   const res = await fetch(`${BASE}/wikiprobe?url=${encodeURIComponent(url)}`);
   const { wiki } = await asJson(res);
   return wiki ?? null;
+}
+
+/** The player's Steam profile background image, or null if none is equipped. */
+export async function fetchSteamProfileBackground(steamId: string): Promise<string | null> {
+  try {
+    const res = await fetch(`${BASE}/background?steamid=${encodeURIComponent(steamId)}`);
+    return (await asJson(res)).background ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Written help for an achievement from the game's Steam Community guides. */
+export async function fetchSteamAchievementTips(appid: string, name: string): Promise<GuideTip[]> {
+  const res = await fetch(`${BASE}/achievementtips?appid=${encodeURIComponent(appid)}&name=${encodeURIComponent(name)}`);
+  const { tips } = await asJson(res);
+  return tips ?? [];
 }
 
 /** Upcoming games picked from what the player plays. */

@@ -1,5 +1,6 @@
 import type { LocalGame } from "./steam/localLibrary";
 import type { SteamCollection } from "./steam/collections";
+import type { NonSteamGame } from "./steam/shortcuts";
 
 /**
  * The contract between the Electron main process and the renderer.
@@ -21,6 +22,10 @@ export const CHANNELS = {
   notify: "dsync:notify",
   signIn: "dsync:steam-sign-in",
   steamCollections: "dsync:steam-collections",
+  nonSteamGames: "dsync:non-steam-games",
+  nonSteamArtwork: "dsync:non-steam-artwork",
+  installUpdate: "dsync:install-update",
+  pendingUpdate: "dsync:pending-update",
   setAppIcon: "dsync:set-app-icon",
   taskbarTheme: "dsync:taskbar-theme",
   fitOverlay: "dsync:fit-overlay",
@@ -33,9 +38,18 @@ export const CHANNELS = {
   onRunningAppChanged: "dsync:running-app-changed",
   onTaskbarThemeChanged: "dsync:taskbar-theme-changed",
   onOverlayEditing: "dsync:overlay-editing-changed",
+  onUpdateReady: "dsync:update-ready",
 } as const;
 
 export type OverlayCorner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
+
+export interface ArtworkResult {
+  /** What was saved: "cover", "header", "hero", "logo". */
+  saved: string[];
+  source: string | null;
+  /** Why nothing was saved, when nothing was. */
+  error?: string;
+}
 
 export interface SteamStatus {
   /** Steam is installed and we found its folders. */
@@ -66,14 +80,17 @@ export interface DesktopSettings {
    * renderer, which is why a packaged build needs no .env and no hosted proxy.
    */
   steamApiKey?: string;
+  /** SteamGridDB API key (optional), for artwork for non-Steam games. Main process only. */
+  steamGridDbKey?: string;
 }
 
 /**
  * What the renderer actually receives: the same settings with the secret
  * swapped for a boolean, so the key never crosses the bridge.
  */
-export interface RedactedSettings extends Omit<DesktopSettings, "steamApiKey"> {
+export interface RedactedSettings extends Omit<DesktopSettings, "steamApiKey" | "steamGridDbKey"> {
   hasSteamApiKey: boolean;
+  hasSteamGridDbKey: boolean;
 }
 
 export const DEFAULT_SETTINGS: DesktopSettings = {
@@ -104,6 +121,21 @@ export interface DsyncBridge {
    * the signed-in Steam ID to pick the right account on a shared PC.
    */
   getSteamCollections(steamId?: string): Promise<SteamCollection[]>;
+
+  /** Games added to Steam with "Add a Non-Steam Game", read from Steam's files. */
+  getNonSteamGames(steamId?: string): Promise<NonSteamGame[]>;
+
+  /** A new version downloaded from GitHub and waiting to install, or null. */
+  getPendingUpdate(): Promise<string | null>;
+  /** Restarts into the downloaded update. */
+  installUpdate(): Promise<void>;
+  onUpdateReady(fn: (version: string) => void): () => void;
+
+  /**
+   * Finds cover, banner, hero and logo art for a non-Steam game and saves it
+   * where Steam shows it. Existing art is kept unless `overwrite`.
+   */
+  fetchNonSteamArtwork(appid: string, overwrite: boolean): Promise<ArtworkResult>;
 
   /**
    * Signs in with Steam via the system browser and a loopback redirect.
@@ -147,4 +179,4 @@ export interface DsyncBridge {
   onRunningAppChanged(fn: (appid: string | null) => void): () => void;
 }
 
-export type { LocalGame, SteamCollection };
+export type { LocalGame, SteamCollection, NonSteamGame };

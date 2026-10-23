@@ -27,6 +27,11 @@ export interface ThemeConfig {
   neutralSat: number;
   /** Corner radius in rem. */
   radius: number;
+  /**
+   * Angled corners: how far (px) the top-left and bottom-right corners are
+   * cut on a diagonal, replacing the rounding. 0 turns it off.
+   */
+  angle: number;
 }
 
 /* ------------------------------------------------------------------ */
@@ -245,6 +250,7 @@ export const buildTokens = (config: ThemeConfig, mode: ResolvedMode): TokenMap =
   ...(mode === "light" ? lightTokens(config) : darkTokens(config)),
   ...compositeTokens(config, mode),
   radius: `${config.radius}rem`,
+  chamfer: `${config.angle ?? 0}px`,
 });
 
 /** Write the tokens onto an element (normally `document.documentElement`). */

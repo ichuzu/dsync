@@ -32,6 +32,11 @@ const bridge: DsyncBridge = {
   getSteamStatus: () => ipcRenderer.invoke(CHANNELS.steamStatus),
   getRunningApp: () => ipcRenderer.invoke(CHANNELS.runningApp),
   getSteamCollections: (steamId) => ipcRenderer.invoke(CHANNELS.steamCollections, steamId),
+  getNonSteamGames: (steamId) => ipcRenderer.invoke(CHANNELS.nonSteamGames, steamId),
+  getPendingUpdate: () => ipcRenderer.invoke(CHANNELS.pendingUpdate),
+  installUpdate: () => ipcRenderer.invoke(CHANNELS.installUpdate),
+  onUpdateReady: (fn: (version: string) => void) => subscribe(CHANNELS.onUpdateReady, fn),
+  fetchNonSteamArtwork: (appid, overwrite) => ipcRenderer.invoke(CHANNELS.nonSteamArtwork, appid, overwrite),
 
   signInWithSteam: () => ipcRenderer.invoke(CHANNELS.signIn),
 

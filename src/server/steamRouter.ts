@@ -8,6 +8,7 @@ import {
   fetchLibraryNews,
   fetchLibraryStats,
   fetchLibraryTags,
+  fetchProfileBackground,
   fetchUpcomingForYou,
   fetchNewsItem,
   fetchPresence,
@@ -17,6 +18,7 @@ import {
 } from "../lib/steam";
 import { fetchHltbTimes } from "../lib/hltb";
 import { findWiki, probeWiki } from "../lib/wikiFinder";
+import { fetchAchievementNames, fetchAchievementTips, findGuides, normalise } from "../lib/achievementGuides";
 
 /**
  * Transport-agnostic Steam API router.
@@ -191,6 +193,26 @@ export async function handleSteamRequest(
           if (wiki) return ok({ wiki });
         }
         return ok({ wiki: null });
+      }
+
+      case "background": {
+        const id = steamId();
+        if (!id) return bad("Missing steamid");
+        return ok({ background: await cached(`bg:${id}`, () => fetchProfileBackground(id)) });
+      }
+
+      case "achievementtips": {
+        // Written help for one achievement from the game's Steam guides.
+        const appid = Number(params.get("appid"));
+        const name = params.get("name")?.trim();
+        if (!appid || !name) return bad("Missing appid or name");
+        const [guides, names] = await Promise.all([
+          cached(`guides:${appid}`, () => findGuides(appid, apiKey, fetch)),
+          cached(`achnames:${appid}`, () => fetchAchievementNames(appid)),
+        ]);
+        const target = names.find((n) => normalise(n.name) === normalise(name)) ?? { name, description: "" };
+        const tips = await fetchAchievementTips(appid, target, names.map((n) => n.name), apiKey, fetch, guides);
+        return ok({ tips });
       }
 
       case "tags": {

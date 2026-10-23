@@ -22,6 +22,7 @@ import {
   type DesktopSettings,
   type RedactedSettings,
   type SteamStatus,
+  type ArtworkResult,
 } from "./ipc";
 import { scanLocalLibrary, type LocalGame } from "./steam/localLibrary";
 import {
@@ -34,8 +35,11 @@ import {
 import { findSteamRoot } from "./steam/paths";
 import { readTaskbarTheme, watchTaskbarTheme } from "./taskbarTheme";
 import { toIco } from "./ico";
+import { installUpdateNow, pendingUpdate, startAutoUpdates } from "./updater";
 import { getForegroundWindow, setForegroundWindow, stopForegroundHelper, warmForegroundHelper } from "./foreground";
 import { readSteamCollections } from "./steam/collections";
+import { readNonSteamGames, runningShortcut, shortcutInfo } from "./steam/shortcuts";
+import { findArtwork, saveArtwork } from "./steam/artwork";
 import { cancelSteamSignIn, signInWithSteam } from "./steam/openid";
 import { createSteamCache, handleSteamRequest } from "../src/server/steamRouter";
 
@@ -98,8 +102,12 @@ async function saveSettings(patch: Partial<DesktopSettings>): Promise<DesktopSet
 
 /** A copy safe to send to the renderer, with the secret replaced by a flag. */
 function redactSettings(s: DesktopSettings): RedactedSettings {
-  const { steamApiKey: key, ...rest } = s;
-  return { ...rest, hasSteamApiKey: Boolean(key?.trim() || process.env.STEAM_API_KEY?.trim()) };
+  const { steamApiKey: key, steamGridDbKey: gridKey, ...rest } = s;
+  return {
+    ...rest,
+    hasSteamApiKey: Boolean(key?.trim() || process.env.STEAM_API_KEY?.trim()),
+    hasSteamGridDbKey: Boolean(gridKey?.trim() || process.env.STEAMGRIDDB_API_KEY?.trim()),
+  };
 }
 
 function applyLoginItem(): void {
@@ -227,7 +235,8 @@ function startWatchers(): void {
     }
 
     try {
-      const running = await getRunningAppId();
+      // Steam apps from the registry; non-Steam games by their process.
+      const running = (await getRunningAppId()) ?? (await runningShortcut());
       if (running !== lastRunning) {
         const started = running && running !== lastRunning;
         lastRunning = running;
@@ -415,12 +424,23 @@ function showWindow(): void {
   mainWindow.focus();
 }
 
+/** Quits for real (not to the tray) and installs the downloaded update. */
+function restartToUpdate(): void {
+  quitting = true;
+  installUpdateNow();
+}
+
 function createTray(): void {
+  // Rebuilt when an update arrives, to add the "Restart to update" item.
+  tray?.destroy();
   tray = new Tray(appIcon());
   tray.setToolTip("Dsync");
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: "Open Dsync", click: showWindow },
+      ...(pendingUpdate()
+        ? [{ label: `Restart to update (${pendingUpdate()})`, click: restartToUpdate }]
+        : []),
       { type: "separator" },
       {
         label: "Start with Windows",
@@ -458,6 +478,32 @@ function registerIpc(): void {
   });
 
   ipcMain.handle(CHANNELS.runningApp, () => getRunningAppId());
+  ipcMain.handle(CHANNELS.nonSteamGames, (_e, steamId?: string) =>
+    readNonSteamGames(typeof steamId === "string" ? steamId : undefined),
+  );
+  ipcMain.handle(CHANNELS.pendingUpdate, () => pendingUpdate());
+  ipcMain.handle(CHANNELS.installUpdate, () => restartToUpdate());
+  ipcMain.handle(CHANNELS.nonSteamArtwork, async (_e, appid: unknown, overwrite: unknown): Promise<ArtworkResult> => {
+    const info = typeof appid === "string" ? shortcutInfo(appid) : null;
+    if (!info) return { saved: [], source: null, error: "Unknown non-Steam game." };
+    const gridKey = settings.steamGridDbKey?.trim() || process.env.STEAMGRIDDB_API_KEY?.trim();
+    try {
+      const set = await findArtwork(info.name, gridKey);
+      if (!set) {
+        return {
+          saved: [],
+          source: null,
+          error: gridKey
+            ? "No artwork found for this game on the Steam store or SteamGridDB."
+            : "Not on the Steam store. Add a free SteamGridDB key in Settings to find art for it.",
+        };
+      }
+      const saved = await saveArtwork(info.gridDir, appid as string, set, overwrite === true);
+      return { saved, source: set.source };
+    } catch (err) {
+      return { saved: [], source: null, error: err instanceof Error ? err.message : "Couldn't fetch artwork." };
+    }
+  });
   ipcMain.handle(CHANNELS.steamCollections, (_e, steamId?: string) =>
     readSteamCollections(typeof steamId === "string" ? steamId : undefined),
   );
@@ -719,6 +765,15 @@ if (!app.requestSingleInstanceLock()) {
     createTray();
     void restoreTaskbarIcon();
     registerOverlayHotkey();
+    startAutoUpdates((version) => {
+      send(CHANNELS.onUpdateReady, version);
+      createTray();
+      if (settings.notifications) {
+        const note = new Notification({ title: `Dsync ${version} is ready`, body: "Click to restart and update, or it installs next time you quit.", icon: appIcon() });
+        note.on("click", restartToUpdate);
+        note.show();
+      }
+    });
     startWatchers();
     watchTaskbarTheme((theme) => send(CHANNELS.onTaskbarThemeChanged, theme));
 

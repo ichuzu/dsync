@@ -4,8 +4,8 @@ import type { ThemeConfig } from "./tokens";
 export const PALETTE_GROUPS = ["Signature", "Neon"] as const;
 export type PaletteGroup = (typeof PALETTE_GROUPS)[number];
 
-/** A named starting point for the theme knobs. */
-export interface Palette extends Omit<ThemeConfig, "presetId" | "mode"> {
+/** A named starting point for the theme knobs. Shape (angles) is the user's own and survives palette changes. */
+export interface Palette extends Omit<ThemeConfig, "presetId" | "mode" | "angle"> {
   id: string;
   name: string;
   /** One line shown under the palette name in the picker. */
@@ -208,6 +208,7 @@ export const DEFAULT_THEME: ThemeConfig = {
   neutralHue: DEFAULT_PALETTE.neutralHue,
   neutralSat: DEFAULT_PALETTE.neutralSat,
   radius: DEFAULT_PALETTE.radius,
+  angle: 0,
 };
 
 /** Apply a palette's colours while keeping the user's current light/dark choice. */
