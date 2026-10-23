@@ -697,7 +697,17 @@ function openOverlay(appid: string): void {
   });
   // Shown without taking focus, so the game keeps it.
   overlayWindow.once("ready-to-show", () => overlayWindow?.showInactive());
+  // Some games push themselves in front of always-on-top windows when they
+  // get focus; re-asserting every couple of seconds brings the overlay back
+  // without taking focus. (Nothing can draw over exclusive fullscreen.)
+  const keepOnTop = setInterval(() => {
+    const win = liveOverlay();
+    if (!win || overlayEditing || !win.isVisible()) return;
+    win.setAlwaysOnTop(true, "screen-saver");
+    win.moveTop();
+  }, 2000);
   overlayWindow.on("closed", () => {
+    clearInterval(keepOnTop);
     overlayWindow = null;
     overlayEditing = false;
   });

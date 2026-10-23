@@ -88,12 +88,13 @@ async function findGuides(appid: number, apiKey: string, fetchImpl: typeof fetch
   });
   const res = await fetchImpl(`${STEAM_API}/IPublishedFileService/QueryFiles/v1/?${params}`);
   if (!res.ok) return [];
-  const files: Array<{ publishedfileid: string; title: string; vote_data?: { votes_up?: number } }> =
+  const files: Array<{ publishedfileid: string; title: string; language?: number; vote_data?: { votes_up?: number } }> =
     (await res.json())?.response?.publishedfiledetails ?? [];
 
-  // Whole-game achievement guides, best rated first; a few pages at most.
+  // Whole-game achievement guides in English (Steam language 0; the query's
+  // own language parameter doesn't filter), best rated first; a few at most.
   const picked = files
-    .filter((f) => /achievement|100\s?%|completion/i.test(f.title))
+    .filter((f) => (f.language ?? 0) === 0 && /achievement|100\s?%|completion/i.test(f.title))
     .sort((a, b) => (b.vote_data?.votes_up ?? 0) - (a.vote_data?.votes_up ?? 0))
     .slice(0, 4);
 

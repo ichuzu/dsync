@@ -12,7 +12,8 @@ import { cn } from "@/lib/utils";
  */
 
 const WEEK = 7 * 24 * 60 * 60 * 1000;
-const cacheKey = (appid: string, name: string) => `dsync.tips.${appid}.${name.toLowerCase()}`;
+// v2: tips cached before non-English guides were filtered out are dropped.
+const cacheKey = (appid: string, name: string) => `dsync.tips.v2.${appid}.${name.toLowerCase()}`;
 
 function readCache(appid: string, name: string): GuideTip[] | null {
   try {
