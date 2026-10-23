@@ -63,11 +63,13 @@ interface SteamContextValue {
   /** Epoch ms of the last successful library sync, or null. */
   lastSynced: number | null;
   error: string | null;
-  signIn: () => void;
+  signIn: () => void | Promise<void>;
   completeLogin: (search: string) => Promise<SteamSession>;
   signOut: () => void;
   refresh: () => void;
 }
+
+import { signInWithSteam } from "@/lib/desktop";
 
 const SESSION_KEY = "dsync.steam.session";
 const libraryKey = (steamId: string) => `dsync.steam.library.${steamId}`;
@@ -485,6 +487,42 @@ export const SteamProvider = ({ children }: { children: ReactNode }) => {
     };
   }, [steamId]);
 
+  /**
+   * Starts Steam sign-in.
+   *
+   * On the desktop build this hands off to the system browser and waits for the
+   * verified id to come back over the loopback callback, so Steam's password
+   * form is never rendered inside the app. In a browser it falls back to the
+   * ordinary top-level redirect.
+   */
+  const signIn = useCallback(async () => {
+    let id: string | null = null;
+    try {
+      id = await signInWithSteam();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Steam sign-in failed");
+      setStatus("error");
+      return;
+    }
+
+    if (!id) {
+      redirectToSteamLogin(); // web: navigate away and come back to /steam-callback
+      return;
+    }
+
+    setStatus("verifying");
+    setError(null);
+    try {
+      const profile = await fetchSteamProfile(id);
+      const next: SteamSession = { steamId: id, profile };
+      writeSession(next);
+      setSession(next); // triggers the library effect
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Steam sign-in failed");
+      setStatus("error");
+    }
+  }, []);
+
   const completeLogin = useCallback(async (search: string) => {
     setStatus("verifying");
     setError(null);
@@ -584,7 +622,7 @@ export const SteamProvider = ({ children }: { children: ReactNode }) => {
     refreshing,
     lastSynced,
     error,
-    signIn: redirectToSteamLogin,
+    signIn,
     completeLogin,
     signOut,
     refresh,

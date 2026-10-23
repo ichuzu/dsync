@@ -15,6 +15,17 @@ export default defineConfig(({ mode }) => {
     server: {
       host: "::",
       port: 8080,
+      // Poll instead of using fs.watch. On Windows, opening a file that another
+      // process is still writing throws EBUSY, and chokidar re-emits that as an
+      // unhandled 'error' on the watcher — which takes the whole dev server
+      // down. Polling never opens a handle, so a half-written file is simply
+      // picked up on the next tick. The interval trades a little latency for
+      // much less CPU than chokidar's 100ms default.
+      watch: {
+        usePolling: true,
+        interval: 300,
+        binaryInterval: 1000,
+      },
     },
     plugins: [
       react(),

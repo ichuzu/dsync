@@ -22,23 +22,114 @@ const relativeTime = (unixSeconds: number): string => {
   return `${Math.round(days / 30)}mo`;
 };
 
+export type NewsCardVariant = "compact" | "cover";
+
 interface GameNewsCardProps {
   group: GameNewsGroup;
   onOpenItem: (item: NewsItem) => void;
+  /**
+   * `compact` is a dense row with a thumbnail — many games fit on a screen.
+   * `cover` is the wide hero card, better for browsing a handful of games.
+   */
+  variant?: NewsCardVariant;
+  /** Above-the-fold rows load their art eagerly and at high priority. */
+  priority?: boolean;
 }
 
 /**
- * A single game's news, collapsed into one wide hero card: the latest headline
- * up top, with any older updates tucked behind an expandable "+N more" list so
- * the feed stays scannable.
+ * A single game's news: the latest headline up front, with any older updates
+ * tucked behind an expandable "+N more" list so the feed stays scannable.
  */
-export const GameNewsCard = ({ group, onOpenItem }: GameNewsCardProps) => {
+export const GameNewsCard = ({
+  group,
+  onOpenItem,
+  variant = "compact",
+  priority = false,
+}: GameNewsCardProps) => {
   const [open, setOpen] = useState(false);
   const { latest, items, count, appid, game } = group;
   const extra = items.slice(1);
 
+  const olderUpdates = count > 1 && (
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <CollapsibleTrigger
+        className={cn(
+          "flex w-full items-center justify-between text-xs font-medium text-muted-foreground transition-colors hover:text-foreground",
+          variant === "cover" ? "px-3 py-2" : "px-2 py-1.5",
+        )}
+      >
+        <span>
+          {open ? "Hide updates" : `+${extra.length} more update${extra.length > 1 ? "s" : ""}`}
+        </span>
+        <ChevronDown className={cn("h-4 w-4 transition-transform", open && "rotate-180")} />
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <ul className="border-t border-border/60">
+          {extra.map((item) => (
+            <li key={item.gid}>
+              <button
+                type="button"
+                onClick={() => onOpenItem(item)}
+                className={cn(
+                  "flex w-full items-start gap-2 text-left transition-colors hover:bg-muted",
+                  variant === "cover" ? "px-3 py-2" : "px-2 py-1.5",
+                )}
+              >
+                <span className="min-w-0 flex-1 truncate text-xs text-foreground/90">
+                  {item.title}
+                </span>
+                {item.date > 0 && (
+                  <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+                    {relativeTime(item.date)}
+                  </span>
+                )}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+
+  if (variant === "compact") {
+    return (
+      <div className="overflow-hidden rounded-lg border border-border/60 bg-background/30 transition-colors hover:border-primary/40">
+        <button
+          type="button"
+          onClick={() => onOpenItem(latest)}
+          className="flex w-full items-center gap-3 p-2 text-left"
+          title={latest.title}
+        >
+          <SteamImage
+            appid={appid}
+            shape="landscape"
+            alt=""
+            loading={priority ? "eager" : "lazy"}
+            fetchPriority={priority ? "high" : undefined}
+            className="h-11 w-[4.75rem] shrink-0 rounded object-cover"
+            fallback={<div className="h-11 w-[4.75rem] shrink-0 rounded bg-muted" />}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[11px] font-semibold uppercase tracking-wide text-primary">
+              {game}
+            </div>
+            <div className="line-clamp-2 text-sm leading-snug text-foreground">
+              {latest.title}
+            </div>
+          </div>
+          {latest.date > 0 && (
+            <span className="shrink-0 self-start text-[10px] tabular-nums text-muted-foreground">
+              {relativeTime(latest.date)}
+            </span>
+          )}
+        </button>
+        {olderUpdates}
+      </div>
+    );
+  }
+
   return (
-    <div className="group/card overflow-hidden rounded-xl border border-border bg-gradient-card transition-all duration-300 hover:border-primary/50 hover:shadow-[0_0_28px_hsl(24_95%_53%/0.28)]">
+    <div className="group/card overflow-hidden rounded-xl border border-border bg-gradient-card transition-all duration-300 hover:border-primary/50 hover:shadow-[0_0_28px_hsl(var(--primary)/0.28)]">
       {/* Hero + latest headline */}
       <button
         type="button"
@@ -50,6 +141,8 @@ export const GameNewsCard = ({ group, onOpenItem }: GameNewsCardProps) => {
           <SteamImage
             appid={appid}
             shape="landscape"
+            loading={priority ? "eager" : "lazy"}
+            fetchPriority={priority ? "high" : undefined}
             className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover/card:scale-105"
             fallback={<div className="absolute inset-0 bg-gradient-card" />}
           />
@@ -70,39 +163,7 @@ export const GameNewsCard = ({ group, onOpenItem }: GameNewsCardProps) => {
         </div>
       </button>
 
-      {/* Older updates for the same game */}
-      {count > 1 && (
-        <Collapsible open={open} onOpenChange={setOpen}>
-          <CollapsibleTrigger className="flex w-full items-center justify-between px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground">
-            <span>
-              {open ? "Hide updates" : `+${extra.length} more update${extra.length > 1 ? "s" : ""}`}
-            </span>
-            <ChevronDown className={cn("h-4 w-4 transition-transform", open && "rotate-180")} />
-          </CollapsibleTrigger>
-          <CollapsibleContent>
-            <ul className="border-t border-border/60">
-              {extra.map((item) => (
-                <li key={item.gid}>
-                  <button
-                    type="button"
-                    onClick={() => onOpenItem(item)}
-                    className="flex w-full items-start gap-2 px-3 py-2 text-left transition-colors hover:bg-muted"
-                  >
-                    <span className="min-w-0 flex-1 truncate text-xs text-foreground/90">
-                      {item.title}
-                    </span>
-                    {item.date > 0 && (
-                      <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
-                        {relativeTime(item.date)}
-                      </span>
-                    )}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </CollapsibleContent>
-        </Collapsible>
-      )}
+      {olderUpdates}
     </div>
   );
 };

@@ -9,7 +9,10 @@
 export const LOGO_DIR = "/logos";
 
 export const LOGOS: Record<string, string> = {
-  steam: "steam.svg",
+  /** Dsync's custom launcher mark. */
+  launcher: "launcher_white.svg",
+  /** Steam's own icon, sourced from https://store.steampowered.com/favicon.ico. */
+  steam: "steam.ico",
 };
 
 /** Returns the public URL for a logo key, or null if it isn't configured. */

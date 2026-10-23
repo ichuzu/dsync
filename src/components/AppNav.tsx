@@ -1,33 +1,38 @@
 import { Link, NavLink } from "react-router-dom";
-import { Gamepad2, Library, Newspaper, BarChart3, type LucideIcon } from "lucide-react";
+import { Library, ListTodo, Newspaper, BarChart3, BookOpen, type LucideIcon } from "lucide-react";
 import { AuthButton } from "@/components/AuthButton";
+import { DsyncMark } from "@/components/DsyncMark";
+import { DsyncWordmark } from "@/components/DsyncWordmark";
+import { ThemePicker } from "@/components/ThemePicker";
+import { DesktopSettings } from "@/components/DesktopSettings";
 import { cn } from "@/lib/utils";
 
 const LINKS: Array<{ to: string; label: string; icon: LucideIcon }> = [
   { to: "/", label: "Library", icon: Library },
+  { to: "/backlog", label: "Backlog", icon: ListTodo },
   { to: "/news", label: "News", icon: Newspaper },
   { to: "/stats", label: "Stats", icon: BarChart3 },
+  { to: "/wiki", label: "Wiki", icon: BookOpen },
 ];
 
 /** Shared sticky top navigation used across the Library, News, and Stats pages. */
 export const AppNav = () => (
   <nav className="sticky top-0 z-30 border-b border-border bg-background/70 backdrop-blur-md">
-    <div className="container mx-auto flex items-center justify-between gap-4 px-4 py-3">
-      <Link to="/" className="flex items-center gap-2">
-        <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-brand text-primary-foreground">
-          <Gamepad2 className="h-5 w-5" />
-        </span>
-        <span className="hidden text-lg font-bold tracking-tight text-foreground sm:inline">
-          Dsync
-        </span>
+    <div className="container mx-auto flex flex-wrap items-center justify-between gap-2 px-4 py-3 sm:flex-nowrap sm:gap-4">
+      <Link to="/" className="flex shrink-0 items-center" aria-label="Dsync home">
+        {/* The wordmark carries the name itself, so no separate text label.
+            It is 3.4:1, so narrow screens get the square mark instead. */}
+        <DsyncMark className="h-8 w-8 sm:hidden" />
+        <DsyncWordmark className="hidden h-8 sm:block" />
       </Link>
 
-      <div className="flex items-center gap-1">
+      <div className="order-3 flex w-full items-center justify-center gap-1 sm:order-none sm:w-auto">
         {LINKS.map(({ to, label, icon: Icon }) => (
           <NavLink
             key={to}
             to={to}
             end={to === "/"}
+            aria-label={label}
             className={({ isActive }) =>
               cn(
                 "flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-sm transition-colors",
@@ -43,7 +48,9 @@ export const AppNav = () => (
         ))}
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2">
+        <ThemePicker />
+        <DesktopSettings />
         <AuthButton />
       </div>
     </div>

@@ -3,7 +3,6 @@ import { GameCard } from "@/components/GameCard";
 import { GameListItem } from "@/components/GameListItem";
 import { GameDetailDrawer } from "@/components/GameDetailDrawer";
 import { AppNav } from "@/components/AppNav";
-import Box from "@mui/material/Box";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -33,6 +32,7 @@ import {
   isPerfectGame,
 } from "@/types/game";
 import { useSteam } from "@/hooks/useSteam";
+import { useDesktop } from "@/hooks/useDesktop";
 import { useCollections } from "@/hooks/useCollections";
 import { cn } from "@/lib/utils";
 
@@ -42,8 +42,13 @@ type ViewMode = "grid" | "list";
 
 const PAGE_SIZE = 36;
 
+/** Library grid: as many 220px columns as fit, matching the portrait cards. */
+const GAME_GRID = "grid gap-5 [grid-template-columns:repeat(auto-fill,minmax(220px,1fr))]";
+
 const Index = () => {
   const steam = useSteam();
+  const desktop = useDesktop();
+  const localGames = useMemo(() => new Map(desktop.installed.map(game => [game.appid, game])), [desktop.installed]);
   // Show the real Steam library once connected; otherwise the demo library.
   const usingSteam = steam.connected;
   const libraryLoading =
@@ -291,7 +296,7 @@ const Index = () => {
               </button>
             ) : null}
           </div>
-          {steam.status === "error" && (
+          {steam.status === "error" && steam.library.length > 0 && (
             <p className="text-xs text-destructive">
               Couldn't load your Steam library: {steam.error}
             </p>
@@ -301,7 +306,26 @@ const Index = () => {
           {libraryLoading ? (
             <LoadingGrid />
           ) : visibleGames.length === 0 ? (
-            usingSteam && steam.library.length === 0 ? (
+            usingSteam && steam.library.length === 0 && steam.status === "error" ? (
+              <EmptyState
+                icon={<Lock className="h-7 w-7 text-destructive" />}
+                iconClass="bg-destructive/15"
+                title="Couldn't reach your Steam library"
+                description={steam.error ?? "Steam didn't respond."}
+                actions={
+                  <>
+                    <Button asChild size="sm">
+                      <a href="https://steamcommunity.com/dev/apikey" target="_blank" rel="noreferrer">
+                        Get a Steam API key
+                      </a>
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={steam.refresh}>
+                      Retry
+                    </Button>
+                  </>
+                }
+              />
+            ) : usingSteam && steam.library.length === 0 ? (
               <EmptyState
                 icon={<Lock className="h-7 w-7 text-warning" />}
                 iconClass="bg-warning/15"
@@ -338,22 +362,18 @@ const Index = () => {
             )
           ) : view === "grid" ? (
             <>
-              <Box
-                sx={{
-                  display: "grid",
-                  gap: 2.5,
-                  gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
-                }}
-              >
+              <div className={GAME_GRID}>
                 {shown.map((game) => (
                   <GameCard
                     key={game.id}
                     game={game}
+                    frameState={usingSteam && desktop.steam?.installed && !desktop.loading && game.launcher === "steam" ? (localGames.get(game.id)?.state === "installed" ? "play" : "download") : "idle"}
+                    downloadProgress={desktop.downloads.get(game.id)?.downloadProgress}
                     live={!!nowPlaying && game.id === nowPlaying.gameId}
                     onClick={() => setSelectedGame(game)}
                   />
                 ))}
-              </Box>
+              </div>
               {hasMore && <LoadMore shown={shown.length} total={visibleGames.length} onClick={() => setPage((p) => p + 1)} />}
             </>
           ) : (
@@ -448,23 +468,17 @@ const LoadMore = ({ shown, total, onClick }: { shown: number; total: number; onC
 );
 
 const LoadingGrid = () => (
-  <Box
-    sx={{
-      display: "grid",
-      gap: 2.5,
-      gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
-    }}
-  >
+  <div className={GAME_GRID}>
     {Array.from({ length: 6 }).map((_, i) => (
       <div key={i} className="overflow-hidden rounded-xl border border-border">
-        <Skeleton className="aspect-[16/9] w-full rounded-none" />
+        <Skeleton className="aspect-[2/3] w-full rounded-none" />
         <div className="space-y-2 p-4">
           <Skeleton className="h-3 w-2/3" />
           <Skeleton className="h-2 w-full" />
         </div>
       </div>
     ))}
-  </Box>
+  </div>
 );
 
 const EmptyState = ({

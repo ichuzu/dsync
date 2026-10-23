@@ -11,6 +11,15 @@ export interface Collection {
   id: string;
   name: string;
   gameIds: string[];
+  /** Set when imported from a Steam collection, so re-importing updates it. */
+  steamCollectionId?: string;
+}
+
+/** The parts of a Steam client collection needed to import it. */
+export interface SteamCollectionSource {
+  id: string;
+  name: string;
+  appids: string[];
 }
 
 interface CollectionsContextValue {
@@ -19,6 +28,11 @@ interface CollectionsContextValue {
   rename: (id: string, name: string) => void;
   remove: (id: string) => void;
   toggleGame: (id: string, gameId: string) => void;
+  /**
+   * Copies a Steam collection in, or refreshes the copy made earlier. Returns
+   * the Dsync collection's id.
+   */
+  importFromSteam: (source: SteamCollectionSource) => string;
   isInCollection: (id: string, gameId: string) => boolean;
   collectionsForGame: (gameId: string) => Collection[];
 }
@@ -91,6 +105,26 @@ export const CollectionsProvider = ({ children }: { children: ReactNode }) => {
     );
   }, []);
 
+  const importFromSteam = useCallback(
+    (source: SteamCollectionSource) => {
+      const existing = collections.find((c) => c.steamCollectionId === source.id);
+      const id = existing?.id ?? makeId();
+      const imported: Collection = {
+        id,
+        name: source.name,
+        gameIds: [...source.appids],
+        steamCollectionId: source.id,
+      };
+      setCollections((prev) =>
+        prev.some((c) => c.id === id)
+          ? prev.map((c) => (c.id === id ? imported : c))
+          : [...prev, imported],
+      );
+      return id;
+    },
+    [collections],
+  );
+
   const isInCollection = useCallback(
     (id: string, gameId: string) =>
       collections.find((c) => c.id === id)?.gameIds.includes(gameId) ?? false,
@@ -108,6 +142,7 @@ export const CollectionsProvider = ({ children }: { children: ReactNode }) => {
     rename,
     remove,
     toggleGame,
+    importFromSteam,
     isInCollection,
     collectionsForGame,
   };

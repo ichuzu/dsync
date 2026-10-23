@@ -1,6 +1,8 @@
 import { useMemo } from "react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { Loader2 } from "lucide-react";
+import { useTheme } from "@/theme/ThemeProvider";
+import { categoricalPalette } from "@/theme/tokens";
 
 export interface GenreSlice {
   name: string;
@@ -9,24 +11,11 @@ export interface GenreSlice {
 }
 
 /**
- * Theme palette — orange family first (to match the brand), then a few
- * distinct hues borrowed from the rarity tiers so many slices stay readable.
- * "Other" is always rendered in muted grey, regardless of position.
+ * Slice colours come from the active theme (see categoricalPalette), so the
+ * chart follows whichever palette the user picked while still alternating
+ * cold and warm hues for separation. "Other" is always muted grey.
  */
-const PALETTE = [
-  "hsl(24 95% 53%)", // primary orange
-  "hsl(16 90% 55%)", // accent amber-orange
-  "hsl(41 92% 56%)", // legendary amber
-  "hsl(28 100% 62%)", // primary glow
-  "hsl(205 80% 58%)", // rare blue
-  "hsl(142 55% 50%)", // green
-  "hsl(270 65% 65%)", // epic purple
-  "hsl(338 75% 60%)", // pink
-];
-const OTHER_COLOR = "hsl(24 6% 55%)";
-
-const colorFor = (name: string, index: number) =>
-  name === "Other" ? OTHER_COLOR : PALETTE[index % PALETTE.length];
+const OTHER_COLOR = "hsl(var(--muted-foreground))";
 
 const formatHours = (h: number) =>
   h < 10 ? h.toFixed(1) : Math.round(h).toLocaleString();
@@ -42,14 +31,20 @@ export const GenrePieChart = ({
   loading?: boolean;
   emptyMessage: string;
 }) => {
+  const { config, resolvedMode } = useTheme();
+  const palette = useMemo(
+    () => categoricalPalette(config, resolvedMode),
+    [config, resolvedMode],
+  );
+
   const slices = useMemo(
     () =>
       data.map((d, i) => ({
         ...d,
         pct: total > 0 ? (d.hours / total) * 100 : 0,
-        color: colorFor(d.name, i),
+        color: d.name === "Other" ? OTHER_COLOR : palette[i % palette.length],
       })),
-    [data, total],
+    [data, total, palette],
   );
 
   if (loading && data.length === 0) {
@@ -76,7 +71,7 @@ export const GenrePieChart = ({
               innerRadius="58%"
               outerRadius="100%"
               paddingAngle={2}
-              stroke="hsl(20 9% 6%)"
+              stroke="hsl(var(--card))"
               strokeWidth={2}
             >
               {slices.map((s) => (

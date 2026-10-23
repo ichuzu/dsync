@@ -1,13 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
-import Drawer from "@mui/material/Drawer";
-import Box from "@mui/material/Box";
-import Typography from "@mui/material/Typography";
-import IconButton from "@mui/material/IconButton";
-import LinearProgress from "@mui/material/LinearProgress";
-import Button from "@mui/material/Button";
-import Skeleton from "@mui/material/Skeleton";
+import { Link } from "react-router-dom";
 import {
-  X,
   Clock,
   CalendarDays,
   Sparkles,
@@ -23,6 +16,8 @@ import {
   Plus,
   Check,
   Youtube,
+  Play,
+  Loader2,
 } from "lucide-react";
 import {
   Achievement,
@@ -31,12 +26,28 @@ import {
   completionPercentage,
   isPerfectGame,
 } from "@/types/game";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { ProgressBar } from "@/components/ProgressBar";
+import { DownloadGlyph, DownloadProgressArt } from "@/components/GameFrame";
+import { CompletionTimes } from "@/components/CompletionTimes";
 import { LAUNCHERS } from "@/lib/launchers";
 import { Logo } from "@/components/Logo";
 import { useSteam } from "@/hooks/useSteam";
 import { useCollections } from "@/hooks/useCollections";
+import { GameNotes } from "@/components/GameNotes";
+import { OVERLAY_HOTKEY_LABEL } from "@/pages/Overlay";
 import { fetchSteamAchievements } from "@/lib/steamClient";
 import { getImageCandidates } from "@/lib/steamImage";
+import { cn } from "@/lib/utils";
+import { getDesktop, isDesktop, installGame, launchGame, openInSteam } from "@/lib/desktop";
+import { useDesktop } from "@/hooks/useDesktop";
 import gamePlaceholder from "@/assets/game-placeholder.jpg";
 
 interface GameDetailDrawerProps {
@@ -45,14 +56,12 @@ interface GameDetailDrawerProps {
   onClose: () => void;
 }
 
-const GOLD = "hsl(41, 92%, 56%)";
-
-const RARITY_COLOR: Record<Rarity, string> = {
-  legendary: "hsl(41, 92%, 56%)",
-  epic: "hsl(270, 65%, 65%)",
-  rare: "hsl(205, 80%, 58%)",
-  uncommon: "hsl(142, 55%, 50%)",
-  common: "hsl(24, 6%, 60%)",
+const RARITY_DOT: Record<Rarity, string> = {
+  legendary: "bg-rarity-legendary",
+  epic: "bg-rarity-epic",
+  rare: "bg-rarity-rare",
+  uncommon: "bg-rarity-uncommon",
+  common: "bg-rarity-common",
 };
 
 const isSteamApp = (game: Game) => game.launcher === "steam" && Number(game.id) > 1000;
@@ -63,26 +72,29 @@ const youtubeGuideUrl = (gameTitle: string, achievementName: string) =>
   )}`;
 
 export const GameDetailDrawer = ({ game, open, onClose }: GameDetailDrawerProps) => (
-  <Drawer
-    anchor="right"
-    open={open && Boolean(game)}
-    onClose={onClose}
-    PaperProps={{
-      sx: {
-        width: { xs: "100%", sm: 460 },
-        bgcolor: "background.default",
-        backgroundImage: "none",
-      },
-    }}
-  >
-    {game && <GameDetailContent key={game.id} game={game} onClose={onClose} />}
-  </Drawer>
+  <Sheet open={open && Boolean(game)} onOpenChange={(next) => !next && onClose()}>
+    {/* SheetContent ships its own close button as its last child; the arbitrary
+        variants below move it onto the banner and give it a scrim so it stays
+        legible over cover art. */}
+    <SheetContent
+      side="right"
+      className={cn(
+        "flex w-full flex-col gap-0 overflow-hidden bg-background p-0 sm:max-w-[460px]",
+        "[&>button]:right-2 [&>button]:top-2 [&>button]:z-10 [&>button]:rounded-full",
+        "[&>button]:bg-[hsl(var(--scrim)/0.6)] [&>button]:p-1.5 [&>button]:opacity-100",
+        "[&>button]:backdrop-blur-[6px] [&>button:hover]:bg-[hsl(var(--scrim)/0.85)]",
+      )}
+    >
+      {game && <GameDetailContent key={game.id} game={game} />}
+    </SheetContent>
+  </Sheet>
 );
 
 type AchFilter = "all" | "unlocked" | "locked";
 
-const GameDetailContent = ({ game, onClose }: { game: Game; onClose: () => void }) => {
+const GameDetailContent = ({ game }: { game: Game }) => {
   const steam = useSteam();
+  const { installed, downloads, steam: localSteam, loading: localLoading, runningAppId } = useDesktop();
   const { collections, toggleGame, create } = useCollections();
   const launcher = LAUNCHERS[game.launcher];
   const canFetch = steam.connected && isSteamApp(game) && Boolean(steam.profile?.steamId);
@@ -93,6 +105,9 @@ const GameDetailContent = ({ game, onClose }: { game: Game; onClose: () => void 
   const [filter, setFilter] = useState<AchFilter>("all");
   const [addingCol, setAddingCol] = useState(false);
   const [colName, setColName] = useState("");
+  const [installPending, setInstallPending] = useState(false);
+  const [installNotice, setInstallNotice] = useState("");
+  const [installError, setInstallError] = useState(false);
 
   useEffect(() => {
     if (!canFetch) return;
@@ -119,9 +134,16 @@ const GameDetailContent = ({ game, onClose }: { game: Game; onClose: () => void 
       : (earned / total) * 100
     : completionPercentage(game);
   const perfect = total > 0 ? earned === total : isPerfectGame(game);
-  const playing = Boolean(
-    steam.presence?.inGame && steam.presence.gameId === game.id,
-  );
+  // Whether the in-game overlay setting is on (desktop only).
+  const [overlayOn, setOverlayOn] = useState(true);
+  useEffect(() => {
+    void getDesktop()?.getSettings().then((s) => setOverlayOn(s.achievementOverlay));
+  }, []);
+
+  // The desktop build sees a launch within seconds; Steam presence lags ~1 min.
+  const playing =
+    runningAppId === game.id ||
+    Boolean(steam.presence?.inGame && steam.presence.gameId === game.id);
 
   // "What's next" — the easiest achievement still locked (highest global unlock
   // %, i.e. the one the most players already have). The app's headline feature.
@@ -152,20 +174,40 @@ const GameDetailContent = ({ game, onClose }: { game: Game; onClose: () => void 
   const bannerCandidates = isSteamApp(game) ? getImageCandidates(game.id, "landscape") : [];
   const bannerSrc = bannerCandidates[0] || game.coverImage || gamePlaceholder;
 
+  /** Present in the local Steam install, so it can actually be launched. */
+  const localGame = downloads.get(game.id) ?? installed.find((g) => g.appid === game.id);
+  const isInstalled = localGame?.state === "installed";
+  const downloadProgress = localGame?.downloadProgress;
+  const hasDownload = typeof downloadProgress === "number";
+
+  const requestInstall = async () => {
+    setInstallPending(true);
+    setInstallNotice("");
+    setInstallError(false);
+    try {
+      if (!await installGame(game.id)) throw new Error("Open the Dsync desktop app to install games.");
+      setInstallNotice("Installation requested. Choose a drive and confirm in Steam to begin.");
+    } catch (error) {
+      setInstallError(true);
+      setInstallNotice(error instanceof Error ? error.message : "Couldn't open Steam. Please try again.");
+    } finally {
+      setInstallPending(false);
+    }
+  };
+
   const filtered = (achievements ?? []).filter((a) =>
     filter === "all" ? true : filter === "unlocked" ? a.unlocked : !a.unlocked,
   );
 
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", height: "100%" }}>
+    <div className="flex h-full flex-col">
       {/* Banner */}
-      <Box sx={{ position: "relative", height: 170, flexShrink: 0 }}>
-        <Box
-          component="img"
+      <div className="relative h-[170px] shrink-0">
+        <img
           src={bannerSrc}
           alt={game.title}
           onError={(e) => {
-            const img = e.currentTarget as HTMLImageElement;
+            const img = e.currentTarget;
             const next = Number(img.dataset.fb ?? "0") + 1;
             if (next < bannerCandidates.length) {
               img.dataset.fb = String(next);
@@ -175,70 +217,39 @@ const GameDetailContent = ({ game, onClose }: { game: Game; onClose: () => void 
               img.src = gamePlaceholder;
             }
           }}
-          sx={{ width: "100%", height: "100%", objectFit: "cover" }}
+          className="h-full w-full object-cover"
         />
-        <Box
-          sx={{
-            position: "absolute",
-            inset: 0,
-            background:
-              "linear-gradient(to top, hsl(20 9% 6%) 0%, hsl(20 9% 6% / 0.2) 60%, hsl(20 9% 6% / 0.4) 100%)",
-          }}
-        />
-        <IconButton
-          onClick={onClose}
-          size="small"
-          sx={{
-            position: "absolute",
-            top: 8,
-            right: 8,
-            bgcolor: "hsl(20 12% 4% / 0.6)",
-            backdropFilter: "blur(6px)",
-            "&:hover": { bgcolor: "hsl(20 12% 4% / 0.85)" },
-          }}
-        >
-          <X size={18} />
-        </IconButton>
-        <Box sx={{ position: "absolute", left: 16, right: 16, bottom: 12 }}>
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 0.5 }}>
+        <div className="absolute inset-0 bg-[linear-gradient(to_top,hsl(var(--background))_0%,hsl(var(--background)/0.2)_60%,hsl(var(--background)/0.4)_100%)]" />
+
+        <div className="absolute bottom-3 left-4 right-4">
+          <div className="mb-1 flex items-center gap-2">
             <Logo name={launcher.logoKey} alt={launcher.name} className="h-4 w-4 rounded-sm" />
-            <Typography variant="caption" sx={{ color: "text.secondary" }}>
+            <span className="text-xs text-muted-foreground">
               {launcher.name}
               {game.genre ? ` · ${game.genre}` : ""}
-            </Typography>
+            </span>
             {playing && (
-              <Box
-                sx={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 0.5,
-                  px: 0.75,
-                  py: 0.25,
-                  borderRadius: 1,
-                  bgcolor: "hsl(142 66% 45% / 0.2)",
-                  color: "hsl(142 66% 45%)",
-                }}
-              >
-                <Box
-                  className="animate-pulse"
-                  sx={{ width: 6, height: 6, borderRadius: "50%", bgcolor: "hsl(142 66% 45%)" }}
-                />
-                <Typography variant="caption" sx={{ fontWeight: 700, fontSize: 10 }}>
-                  Playing
-                </Typography>
-              </Box>
+              <span className="flex items-center gap-1 rounded-md bg-success/20 px-1.5 py-0.5 text-success">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-success" />
+                <span className="text-[10px] font-bold">Playing</span>
+              </span>
             )}
-          </Box>
-          <Typography variant="h6" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
-            {game.title}
-          </Typography>
-        </Box>
-      </Box>
+          </div>
+          <SheetTitle className="text-lg font-bold leading-tight">{game.title}</SheetTitle>
+          <SheetDescription className="sr-only">
+            Achievement progress and details for {game.title}.
+          </SheetDescription>
+        </div>
+      </div>
 
       {/* Body */}
-      <Box sx={{ p: 2.5, overflowY: "auto", flex: 1 }}>
+      <div className="flex-1 overflow-y-auto p-5">
+        <Button asChild variant="outline" className="mb-5 w-full">
+          <Link to={`/wiki?game=${encodeURIComponent(game.id)}&title=${encodeURIComponent(game.title)}`}>Game wiki & guides</Link>
+        </Button>
+        <div className="mb-5"><CompletionTimes key={game.id} game={game} /></div>
         {/* Quick facts */}
-        <Box sx={{ display: "flex", gap: 1.5, mb: 2.5 }}>
+        <div className="mb-5 flex gap-3">
           <Fact icon={<Clock size={15} />} label="Playtime" value={`${game.playtimeHours}h`} />
           <Fact icon={<CalendarDays size={15} />} label="Last played" value={game.lastPlayed ?? "—"} />
           <Fact
@@ -246,53 +257,40 @@ const GameDetailContent = ({ game, onClose }: { game: Game; onClose: () => void 
             label="Sync"
             value={game.synced ? "Synced" : "Pending"}
           />
-        </Box>
+        </div>
 
         {/* Completion */}
-        <Box sx={{ mb: 2.5 }}>
-          <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", mb: 1 }}>
-            <Typography variant="subtitle2" sx={{ color: "text.secondary" }}>
-              Achievements
-            </Typography>
-            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+        <div className="mb-5">
+          <div className="mb-2 flex items-baseline justify-between">
+            <h3 className="text-sm font-medium text-muted-foreground">Achievements</h3>
+            <div className="flex items-center gap-2">
               {perfect && (
-                <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, color: GOLD }}>
+                <span className="flex items-center gap-1 text-perfect">
                   <Sparkles size={14} />
-                  <Typography variant="caption" sx={{ fontWeight: 700 }}>
-                    Perfect
-                  </Typography>
-                </Box>
+                  <span className="text-xs font-bold">Perfect</span>
+                </span>
               )}
-              <Typography sx={{ fontWeight: 700 }}>
+              <span className="font-bold">
                 {earned}/{total}
-              </Typography>
-            </Box>
-          </Box>
-          <LinearProgress
-            variant="determinate"
+              </span>
+            </div>
+          </div>
+          <ProgressBar
             value={completion}
-            sx={{
-              height: 10,
-              borderRadius: 5,
-              bgcolor: "hsl(24 7% 14%)",
-              "& .MuiLinearProgress-bar": {
-                borderRadius: 5,
-                backgroundColor: perfect ? GOLD : "primary.main",
-              },
-            }}
+            label={`${game.title} achievement completion`}
+            className="h-2.5"
+            barClassName={perfect ? "bg-perfect" : undefined}
           />
-          <Typography variant="caption" sx={{ color: "text.secondary", mt: 0.5, display: "block" }}>
+          <span className="mt-1 block text-xs text-muted-foreground">
             {completion.toFixed(0)}% complete
-          </Typography>
-        </Box>
+          </span>
+        </div>
 
         {/* Per-game stats */}
         {total > 0 && (
-          <Box sx={{ mb: 2.5 }}>
-            <Typography variant="subtitle2" sx={{ color: "text.secondary", mb: 1 }}>
-              Stats
-            </Typography>
-            <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5 }}>
+          <div className="mb-5">
+            <h3 className="mb-2 text-sm font-medium text-muted-foreground">Stats</h3>
+            <div className="grid grid-cols-2 gap-3">
               <Fact icon={<Target size={15} />} label="Achievements left" value={String(left)} />
               <Fact
                 icon={<Timer size={15} />}
@@ -302,27 +300,29 @@ const GameDetailContent = ({ game, onClose }: { game: Game; onClose: () => void 
               <Fact
                 icon={<Hourglass size={15} />}
                 label="Est. to 100%"
-                value={
-                  perfect ? "Complete" : estToComplete != null ? `~${estToComplete}h` : "—"
-                }
+                value={perfect ? "Complete" : estToComplete != null ? `~${estToComplete}h` : "—"}
               />
               <Fact icon={<CalendarClock size={15} />} label="Started" value={startedDate ?? "—"} />
-            </Box>
+            </div>
             {estToComplete != null && !perfect && (
-              <Typography variant="caption" sx={{ color: "text.secondary", mt: 1, display: "block" }}>
+              <p className="mt-2 text-xs text-muted-foreground">
                 ~{estToComplete}h more at your current pace ({hoursPerAch?.toFixed(1)}h per
                 achievement) to unlock the remaining {left}.
-              </Typography>
+              </p>
             )}
-          </Box>
+          </div>
         )}
 
+        {/* Notes, shared with the in-game overlay */}
+        <div className="mb-5">
+          <h3 className="mb-2 text-sm font-medium text-muted-foreground">Your notes</h3>
+          <GameNotes appid={game.id} />
+        </div>
+
         {/* Collections */}
-        <Box sx={{ mb: 2.5 }}>
-          <Typography variant="subtitle2" sx={{ color: "text.secondary", mb: 1 }}>
-            Collections
-          </Typography>
-          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75, alignItems: "center" }}>
+        <div className="mb-5">
+          <h3 className="mb-2 text-sm font-medium text-muted-foreground">Collections</h3>
+          <div className="flex flex-wrap items-center gap-1.5">
             {collections.map((c) => {
               const inIt = c.gameIds.includes(game.id);
               return (
@@ -333,7 +333,7 @@ const GameDetailContent = ({ game, onClose }: { game: Game; onClose: () => void 
               );
             })}
             {addingCol ? (
-              <Box sx={{ display: "flex", gap: 0.5, alignItems: "center" }}>
+              <div className="flex items-center gap-1">
                 <input
                   autoFocus
                   value={colName}
@@ -348,7 +348,7 @@ const GameDetailContent = ({ game, onClose }: { game: Game; onClose: () => void 
                 <button type="button" onClick={addNewCollection} className="text-primary">
                   <Check size={14} />
                 </button>
-              </Box>
+              </div>
             ) : (
               <button
                 type="button"
@@ -358,80 +358,51 @@ const GameDetailContent = ({ game, onClose }: { game: Game; onClose: () => void 
                 <Plus size={12} /> New
               </button>
             )}
-          </Box>
-        </Box>
+          </div>
+        </div>
 
         {/* Individual achievements */}
         {canFetch ? (
-          <Box>
+          <div>
             {recommendedNext && (
-              <Box
-                sx={{
-                  mb: 2,
-                  p: 1.5,
-                  borderRadius: 2,
-                  border: "1px solid",
-                  borderColor: "primary.main",
-                  bgcolor: "hsl(24 95% 53% / 0.08)",
-                }}
-              >
-                <Typography
-                  variant="caption"
-                  sx={{ color: "primary.main", fontWeight: 800, letterSpacing: 0.5 }}
-                >
+              <div className="mb-4 rounded-lg border border-primary bg-primary/[0.08] p-3">
+                <span className="text-xs font-extrabold tracking-wide text-primary">
                   ★ GO FOR THIS NEXT
-                </Typography>
-                <Box sx={{ display: "flex", gap: 1.5, alignItems: "center", mt: 1 }}>
+                </span>
+                <div className="mt-2 flex items-center gap-3">
                   {recommendedNext.icon ? (
-                    <Box
-                      component="img"
+                    <img
                       src={recommendedNext.icon}
                       alt=""
-                      sx={{ width: 44, height: 44, flexShrink: 0, borderRadius: 1 }}
+                      className="h-11 w-11 shrink-0 rounded-md"
                     />
                   ) : (
-                    <Box
-                      sx={{
-                        width: 44,
-                        height: 44,
-                        flexShrink: 0,
-                        borderRadius: 1,
-                        bgcolor: "hsl(24 7% 14%)",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        color: "text.secondary",
-                      }}
-                    >
+                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
                       <Trophy size={20} />
-                    </Box>
+                    </div>
                   )}
-                  <Box sx={{ minWidth: 0, flex: 1 }}>
-                    <Typography variant="body2" sx={{ fontWeight: 700 }} noWrap>
-                      {recommendedNext.name}
-                    </Typography>
-                    <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-bold">{recommendedNext.name}</p>
+                    <p className="text-xs text-muted-foreground">
                       {recommendedNext.globalUnlockPct
                         ? `${recommendedNext.globalUnlockPct.toFixed(1)}% of players have this — your easiest win`
                         : "Your easiest remaining achievement"}
-                    </Typography>
-                  </Box>
-                </Box>
-                <Button
-                  fullWidth
-                  size="small"
-                  variant="contained"
-                  sx={{ mt: 1.5 }}
-                  href={youtubeGuideUrl(game.title, recommendedNext.name)}
-                  target="_blank"
-                  rel="noreferrer"
-                  startIcon={<Youtube size={16} />}
-                >
-                  Watch a guide
+                    </p>
+                  </div>
+                </div>
+                <Button asChild size="sm" className="mt-3 w-full">
+                  <a
+                    href={youtubeGuideUrl(game.title, recommendedNext.name)}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <Youtube size={16} className="mr-2" /> Watch a guide
+                  </a>
                 </Button>
-              </Box>
+              </div>
             )}
-            <Box sx={{ display: "flex", gap: 0.75, mb: 1.5 }}>
+
+            <div className="mb-3 flex gap-1.5">
               <AchChip active={filter === "all"} onClick={() => setFilter("all")}>
                 All {total > 0 ? total : ""}
               </AchChip>
@@ -441,143 +412,156 @@ const GameDetailContent = ({ game, onClose }: { game: Game; onClose: () => void 
               <AchChip active={filter === "locked"} onClick={() => setFilter("locked")}>
                 Locked {Math.max(total - earned, 0)}
               </AchChip>
-            </Box>
+            </div>
 
             {loading ? (
-              <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
+              <div className="flex flex-col gap-3">
                 {Array.from({ length: 6 }).map((_, i) => (
-                  <Box key={i} sx={{ display: "flex", gap: 1.5 }}>
-                    <Skeleton variant="rounded" width={40} height={40} />
-                    <Box sx={{ flex: 1 }}>
-                      <Skeleton width="60%" />
-                      <Skeleton width="90%" height={12} />
-                    </Box>
-                  </Box>
+                  <div key={i} className="flex gap-3">
+                    <Skeleton className="h-10 w-10 shrink-0 rounded-md" />
+                    <div className="flex-1 space-y-2 py-1">
+                      <Skeleton className="h-3 w-3/5" />
+                      <Skeleton className="h-3 w-[90%]" />
+                    </div>
+                  </div>
                 ))}
-              </Box>
+              </div>
             ) : error ? (
-              <Typography variant="body2" sx={{ color: "error.main" }}>
-                Couldn't load achievements: {error}
-              </Typography>
+              <p className="text-sm text-destructive">Couldn't load achievements: {error}</p>
             ) : filtered.length === 0 ? (
-              <Typography variant="body2" sx={{ color: "text.secondary" }}>
-                {total === 0
-                  ? "This game has no achievements."
-                  : `No ${filter} achievements.`}
-              </Typography>
+              <p className="text-sm text-muted-foreground">
+                {total === 0 ? "This game has no achievements." : `No ${filter} achievements.`}
+              </p>
             ) : (
-              <Box sx={{ display: "flex", flexDirection: "column" }}>
+              <div className="flex flex-col">
                 {filtered.map((a) => (
                   <AchievementRow key={a.id} a={a} gameTitle={game.title} />
                 ))}
-              </Box>
+              </div>
             )}
-          </Box>
+          </div>
         ) : (
-          <Typography variant="body2" sx={{ color: "text.secondary" }}>
+          <p className="text-sm text-muted-foreground">
             {isSteamApp(game)
               ? "Sign in with Steam to see individual achievements."
               : "Individual achievements are available for Steam games."}
-          </Typography>
+          </p>
         )}
-      </Box>
+      </div>
 
       {/* Footer */}
       {isSteamApp(game) && (
-        <Box sx={{ p: 2, borderTop: "1px solid", borderColor: "divider", flexShrink: 0 }}>
+        <div className="shrink-0 space-y-3 border-t border-border p-4">
+          {isDesktop() && hasDownload && (
+            <div className="space-y-2" role="status">
+              <p className="text-xs text-muted-foreground">
+                {localGame?.state === "paused" ? "Paused in Steam" : "Downloading / updating in Steam"} · {downloadProgress.toFixed(0)}%
+              </p>
+              <DownloadProgressArt value={downloadProgress} label={`${game.title} download progress`} />
+            </div>
+          )}
+          {installNotice && <p role={installError ? "alert" : "status"} className={cn("text-xs", installError ? "text-destructive" : "text-muted-foreground")}>{installNotice}</p>}
+          <div className="flex gap-2">
+          {playing ? (
+            isDesktop() ? (
+              overlayOn ? (
+                <p className="flex flex-1 items-center gap-2 rounded-md border border-success/40 bg-success/10 px-3 text-xs text-muted-foreground">
+                  <Trophy size={14} className="shrink-0 text-success" />
+                  <span>In-game overlay is on · <kbd className="font-semibold text-foreground">{OVERLAY_HOTKEY_LABEL}</kbd> to edit it</span>
+                </p>
+              ) : (
+                <Button
+                  className="flex-1"
+                  onClick={() => void getDesktop()?.setSettings({ achievementOverlay: true }).then(() => setOverlayOn(true))}
+                >
+                  <Trophy size={16} className="mr-2" /> Turn on in-game overlay
+                </Button>
+              )
+            ) : (
+              <Button className="flex-1" disabled>
+                <Play size={16} className="mr-2" /> Playing now
+              </Button>
+            )
+          ) : (
+            isInstalled && (
+              <Button className="flex-1" onClick={() => void launchGame(game.id)}>
+                <Play size={16} className="mr-2" /> Play
+              </Button>
+            )
+          )}
+          {isDesktop() && !isInstalled && !hasDownload && (
+            <Button className="flex-1" disabled={localLoading || installPending || !localSteam?.installed} onClick={requestInstall}>
+              {localLoading || installPending ? <Loader2 size={16} className="mr-2 animate-spin" /> : <DownloadGlyph />}
+              {localLoading ? "Checking Steam…" : installPending ? "Opening Steam…" : localGame ? "Install / update" : "Install via Steam"}
+            </Button>
+          )}
+          {/* On the desktop build this opens Steam itself; in a browser it
+              falls through to the store website. */}
           <Button
-            fullWidth
-            variant="contained"
-            href={`https://store.steampowered.com/app/${game.id}`}
-            target="_blank"
-            rel="noreferrer"
-            endIcon={<ExternalLink size={16} />}
+            asChild={!isDesktop()}
+            variant={isDesktop() || isInstalled ? "outline" : "default"}
+            className="flex-1"
+            onClick={isDesktop() ? () => void openInSteam(game.id) : undefined}
           >
-            View on Steam
+            {isDesktop() ? (
+              <span>
+                View on Steam <ExternalLink size={16} className="ml-2" />
+              </span>
+            ) : (
+              <a
+                href={`https://store.steampowered.com/app/${game.id}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                View on Steam <ExternalLink size={16} className="ml-2" />
+              </a>
+            )}
           </Button>
-        </Box>
+          </div>
+          {isDesktop() && !localLoading && !localSteam?.installed && <p className="text-xs text-muted-foreground">Steam must be installed on this PC to install games.</p>}
+        </div>
       )}
-    </Box>
+    </div>
   );
 };
 
 const AchievementRow = ({ a, gameTitle }: { a: Achievement; gameTitle: string }) => (
-  <Box
-    className="group"
-    sx={{
-      display: "flex",
-      gap: 1.5,
-      alignItems: "flex-start",
-      py: 1.25,
-      borderTop: "1px solid",
-      borderColor: "divider",
-      opacity: a.unlocked ? 1 : 0.7,
-    }}
+  <div
+    className={cn(
+      "group flex items-start gap-3 border-t border-border py-2.5",
+      a.unlocked ? "opacity-100" : "opacity-70",
+    )}
   >
     {a.icon ? (
-      <Box
-        component="img"
+      <img
         src={a.icon}
         alt=""
         loading="lazy"
-        sx={{
-          width: 40,
-          height: 40,
-          flexShrink: 0,
-          borderRadius: 1,
-          filter: a.unlocked ? "none" : "grayscale(1)",
-        }}
+        className={cn("h-10 w-10 shrink-0 rounded-md", !a.unlocked && "grayscale")}
       />
     ) : (
-      <Box
-        sx={{
-          width: 40,
-          height: 40,
-          flexShrink: 0,
-          borderRadius: 1,
-          bgcolor: "hsl(24 7% 14%)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          color: "text.secondary",
-        }}
-      >
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
         <Trophy size={18} />
-      </Box>
+      </div>
     )}
 
-    <Box sx={{ minWidth: 0, flex: 1 }}>
-      <Typography variant="body2" sx={{ fontWeight: 600 }}>
-        {a.name}
-      </Typography>
+    <div className="min-w-0 flex-1">
+      <p className="text-sm font-semibold">{a.name}</p>
       {a.description && (
-        <Typography
-          variant="caption"
-          sx={{
-            color: "text.secondary",
-            display: "-webkit-box",
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: "vertical",
-            overflow: "hidden",
-          }}
-        >
-          {a.description}
-        </Typography>
+        <p className="line-clamp-2 text-xs text-muted-foreground">{a.description}</p>
       )}
-      <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, mt: 0.5 }}>
-        <Box sx={{ width: 7, height: 7, borderRadius: "50%", bgcolor: RARITY_COLOR[a.rarity] }} />
-        <Typography variant="caption" sx={{ color: "text.secondary" }}>
+      <div className="mt-1 flex items-center gap-1.5">
+        <span className={cn("h-[7px] w-[7px] rounded-full", RARITY_DOT[a.rarity])} />
+        <span className="text-xs text-muted-foreground">
           {a.globalUnlockPct ? `${a.globalUnlockPct.toFixed(1)}% of players` : "Rarity n/a"}
-        </Typography>
+        </span>
         {a.unlocked && a.unlockedDate && (
-          <Typography variant="caption" sx={{ color: "text.secondary" }}>
-            · {a.unlockedDate}
-          </Typography>
+          <span className="text-xs text-muted-foreground">· {a.unlockedDate}</span>
         )}
-      </Box>
-    </Box>
+      </div>
+    </div>
 
-    <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexShrink: 0, mt: 0.5 }}>
+    <div className="mt-1 flex shrink-0 items-center gap-2">
       <a
         href={youtubeGuideUrl(gameTitle, a.name)}
         target="_blank"
@@ -588,11 +572,11 @@ const AchievementRow = ({ a, gameTitle }: { a: Achievement; gameTitle: string })
       >
         <Youtube size={16} />
       </a>
-      <Box sx={{ color: a.unlocked ? "success.main" : "text.disabled" }}>
+      <span className={a.unlocked ? "text-success" : "text-muted-foreground/50"}>
         {a.unlocked ? <CheckCircle2 size={16} /> : <Lock size={14} />}
-      </Box>
-    </Box>
-  </Box>
+      </span>
+    </div>
+  </div>
 );
 
 const AchChip = ({
@@ -607,37 +591,23 @@ const AchChip = ({
   <button
     type="button"
     onClick={onClick}
-    className={
-      "rounded-full border px-2.5 py-1 text-xs transition-colors " +
-      (active
+    className={cn(
+      "rounded-full border px-2.5 py-1 text-xs transition-colors",
+      active
         ? "border-primary bg-primary/15 text-primary"
-        : "border-border text-muted-foreground hover:text-foreground")
-    }
+        : "border-border text-muted-foreground hover:text-foreground",
+    )}
   >
     {children}
   </button>
 );
 
 const Fact = ({ icon, label, value }: { icon: ReactNode; label: string; value: string }) => (
-  <Box
-    sx={{
-      flex: 1,
-      borderRadius: 2,
-      border: "1px solid",
-      borderColor: "divider",
-      p: 1.25,
-      bgcolor: "background.paper",
-    }}
-  >
-    <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, color: "text.secondary", mb: 0.5 }}>
+  <div className="flex-1 rounded-lg border border-border bg-card p-2.5">
+    <div className="mb-1 flex items-center gap-1.5 text-muted-foreground">
       {icon}
-      <Typography variant="caption">{label}</Typography>
-    </Box>
-    <Typography
-      variant="body2"
-      sx={{ fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
-    >
-      {value}
-    </Typography>
-  </Box>
+      <span className="text-xs">{label}</span>
+    </div>
+    <p className="truncate text-sm font-semibold">{value}</p>
+  </div>
 );

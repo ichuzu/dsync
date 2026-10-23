@@ -1,15 +1,26 @@
-import { useMemo, useState } from "react";
-import { Check, Loader2, Newspaper, Plus, Search, Settings2 } from "lucide-react";
+import { useMemo, useState, type ReactNode } from "react";
+import { Check, LayoutGrid, List, Loader2, Newspaper, Plus, Search, Settings2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { GameNewsCard } from "@/components/GameNewsCard";
+import { GameNewsCard, type NewsCardVariant } from "@/components/GameNewsCard";
 import { NewsArticleDialog } from "@/components/NewsArticleDialog";
 import { groupNewsByGame } from "@/lib/news";
 import { cn } from "@/lib/utils";
 import type { NewsItem } from "@/lib/steam";
 
-// Number of game cards to show before the "show more" toggle.
-const INITIAL = 9;
+// How many games to show before the "show more" toggle. The dense rows fit far
+// more on a screen than the hero cards, so each layout gets its own cap.
+const INITIAL: Record<NewsCardVariant, number> = { compact: 8, cover: 6 };
+
+// The first row of art is above the fold and worth fetching eagerly.
+const PRIORITY_COUNT = 3;
+
+const VIEW_KEY = "dsync.news.view";
+
+const GRID: Record<NewsCardVariant, string> = {
+  compact: "grid grid-cols-1 gap-2 lg:grid-cols-2",
+  cover: "grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3",
+};
 
 interface Candidate {
   id: string;
@@ -40,6 +51,14 @@ export const GameNewsFeed = ({
 }) => {
   const [expanded, setExpanded] = useState(false);
   const [managing, setManaging] = useState(false);
+  const [view, setView] = useState<NewsCardVariant>(() => {
+    try {
+      const saved = localStorage.getItem(VIEW_KEY);
+      return saved === "cover" ? "cover" : "compact";
+    } catch {
+      return "compact";
+    }
+  });
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<NewsItem | null>(null);
 
@@ -50,7 +69,18 @@ export const GameNewsFeed = ({
   );
   // Collapse to one card per game so multiple updates don't clutter the feed.
   const groups = useMemo(() => groupNewsByGame(feed), [feed]);
-  const shown = expanded ? groups : groups.slice(0, INITIAL);
+  const initial = INITIAL[view];
+  const shown = expanded ? groups : groups.slice(0, initial);
+
+  const chooseView = (next: NewsCardVariant) => {
+    setView(next);
+    setExpanded(false);
+    try {
+      localStorage.setItem(VIEW_KEY, next);
+    } catch {
+      /* no storage — the choice just won't persist */
+    }
+  };
 
   const filteredCandidates = useMemo(() => {
     const term = query.trim().toLowerCase();
@@ -73,12 +103,28 @@ export const GameNewsFeed = ({
         {loading && feed.length > 0 && (
           <Loader2 className="ml-1 h-3.5 w-3.5 animate-spin text-muted-foreground" />
         )}
+        <div className="ml-auto inline-flex items-center rounded-md border border-border p-0.5">
+          <ViewButton
+            active={view === "compact"}
+            onClick={() => chooseView("compact")}
+            label="Compact list"
+          >
+            <List className="h-3.5 w-3.5" />
+          </ViewButton>
+          <ViewButton
+            active={view === "cover"}
+            onClick={() => chooseView("cover")}
+            label="Cover cards"
+          >
+            <LayoutGrid className="h-3.5 w-3.5" />
+          </ViewButton>
+        </div>
         {manageable && (
           <button
             type="button"
             onClick={() => setManaging((v) => !v)}
             className={cn(
-              "ml-auto inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors",
+              "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors",
               managing
                 ? "bg-primary/15 text-primary"
                 : "text-muted-foreground hover:text-foreground",
@@ -135,9 +181,15 @@ export const GameNewsFeed = ({
       )}
 
       {loading && feed.length === 0 ? (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="aspect-[16/9] animate-pulse rounded-xl bg-muted" />
+        <div className={cn(GRID[view])}>
+          {Array.from({ length: view === "compact" ? 4 : 3 }).map((_, i) => (
+            <div
+              key={i}
+              className={cn(
+                "animate-pulse bg-muted",
+                view === "compact" ? "h-[3.75rem] rounded-lg" : "aspect-[16/9] rounded-xl",
+              )}
+            />
           ))}
         </div>
       ) : feed.length === 0 ? (
@@ -150,23 +202,25 @@ export const GameNewsFeed = ({
         </p>
       ) : (
         <>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {shown.map((group) => (
+          <div className={cn(GRID[view])}>
+            {shown.map((group, i) => (
               <GameNewsCard
                 key={group.appid}
                 group={group}
                 onOpenItem={setSelected}
+                variant={view}
+                priority={i < PRIORITY_COUNT}
               />
             ))}
           </div>
 
-          {groups.length > INITIAL && (
+          {groups.length > initial && (
             <button
               type="button"
               onClick={() => setExpanded((v) => !v)}
               className="mt-4 text-sm font-medium text-primary hover:underline"
             >
-              {expanded ? "Show less" : `Show ${groups.length - INITIAL} more`}
+              {expanded ? "Show less" : `Show ${groups.length - initial} more`}
             </button>
           )}
         </>
@@ -180,3 +234,29 @@ export const GameNewsFeed = ({
     </Card>
   );
 };
+
+const ViewButton = ({
+  active,
+  onClick,
+  label,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+  children: ReactNode;
+}) => (
+  <button
+    type="button"
+    onClick={onClick}
+    title={label}
+    aria-label={label}
+    aria-pressed={active}
+    className={cn(
+      "rounded p-1 transition-colors",
+      active ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground",
+    )}
+  >
+    {children}
+  </button>
+);
