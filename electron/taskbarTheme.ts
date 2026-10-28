@@ -1,8 +1,5 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { nativeTheme } from "electron";
-
-const run = promisify(execFile);
+import { readUserRegistry } from "./winHelper";
 
 /**
  * Whether the Windows taskbar is light or dark, so the app icon can pick a
@@ -17,17 +14,13 @@ const run = promisify(execFile);
 
 export type TaskbarTheme = "light" | "dark";
 
-const KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize";
+/** Under HKEY_CURRENT_USER; read through the long-lived helper, not reg.exe. */
+const KEY = "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize";
 
 export async function readTaskbarTheme(): Promise<TaskbarTheme> {
   if (process.platform !== "win32") return nativeTheme.shouldUseDarkColors ? "dark" : "light";
-  try {
-    const { stdout } = await run("reg", ["query", KEY, "/v", "SystemUsesLightTheme"], { windowsHide: true });
-    return /REG_DWORD\s+0x0*1\b/.test(stdout) ? "light" : "dark";
-  } catch {
-    // Older Windows without the setting has a dark taskbar.
-    return "dark";
-  }
+  // Older Windows without the setting has a dark taskbar.
+  return (await readUserRegistry(KEY, "SystemUsesLightTheme")) === "1" ? "light" : "dark";
 }
 
 /** Calls `onChange` whenever the taskbar flips. Returns a stop function. */

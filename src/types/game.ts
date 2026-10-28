@@ -20,6 +20,14 @@ export interface Game {
   lastPlayed?: string;
   /** Whether this game's achievements are fully synced from the launcher. */
   synced: boolean;
+  /**
+   * Added to Steam as a non-Steam game ("Add a Non-Steam Game"): no
+   * achievements, store page or Web API data, but it can be launched
+   * through Steam with `launchId`.
+   */
+  nonSteam?: boolean;
+  /** steam://rungameid/ id for non-Steam games. */
+  launchId?: string;
 }
 
 export interface RarityBreakdown {

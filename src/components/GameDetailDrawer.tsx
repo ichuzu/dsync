@@ -9,6 +9,8 @@ import {
   RefreshCcw,
   Lock,
   Trophy,
+  BookOpenText,
+  Image as ImageIcon,
   Target,
   Timer,
   Hourglass,
@@ -42,11 +44,13 @@ import { Logo } from "@/components/Logo";
 import { useSteam } from "@/hooks/useSteam";
 import { useCollections } from "@/hooks/useCollections";
 import { GameNotes } from "@/components/GameNotes";
+import { AchievementTips } from "@/components/AchievementTips";
+import { CustomAchievements } from "@/components/CustomAchievements";
 import { OVERLAY_HOTKEY_LABEL } from "@/pages/Overlay";
 import { fetchSteamAchievements } from "@/lib/steamClient";
 import { getImageCandidates } from "@/lib/steamImage";
 import { cn } from "@/lib/utils";
-import { getDesktop, isDesktop, installGame, launchGame, openInSteam } from "@/lib/desktop";
+import { fetchNonSteamArtwork, getDesktop, isDesktop, installGame, launchGame, openInSteam } from "@/lib/desktop";
 import { useDesktop } from "@/hooks/useDesktop";
 import gamePlaceholder from "@/assets/game-placeholder.jpg";
 
@@ -64,7 +68,7 @@ const RARITY_DOT: Record<Rarity, string> = {
   common: "bg-rarity-common",
 };
 
-const isSteamApp = (game: Game) => game.launcher === "steam" && Number(game.id) > 1000;
+const isSteamApp = (game: Game) => game.launcher === "steam" && !game.nonSteam && Number(game.id) > 1000;
 
 const youtubeGuideUrl = (gameTitle: string, achievementName: string) =>
   `https://www.youtube.com/results?search_query=${encodeURIComponent(
@@ -230,7 +234,7 @@ const GameDetailContent = ({ game }: { game: Game }) => {
             </span>
             {playing && (
               <span className="flex items-center gap-1 rounded-md bg-success/20 px-1.5 py-0.5 text-success">
-                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-success" />
+                <span className="h-1.5 w-1.5 rounded-full bg-success shadow-[0_0_6px_hsl(var(--success))]" />
                 <span className="text-[10px] font-bold">Playing</span>
               </span>
             )}
@@ -250,17 +254,20 @@ const GameDetailContent = ({ game }: { game: Game }) => {
         <div className="mb-5"><CompletionTimes key={game.id} game={game} /></div>
         {/* Quick facts */}
         <div className="mb-5 flex gap-3">
-          <Fact icon={<Clock size={15} />} label="Playtime" value={`${game.playtimeHours}h`} />
+          {/* Steam records no playtime or sync for non-Steam games, so only the date shows. */}
+          {!game.nonSteam && <Fact icon={<Clock size={15} />} label="Playtime" value={`${game.playtimeHours}h`} />}
           <Fact icon={<CalendarDays size={15} />} label="Last played" value={game.lastPlayed ?? "—"} />
-          <Fact
-            icon={game.synced ? <CheckCircle2 size={15} /> : <RefreshCcw size={15} />}
-            label="Sync"
-            value={game.synced ? "Synced" : "Pending"}
-          />
+          {!game.nonSteam && (
+            <Fact
+              icon={game.synced ? <CheckCircle2 size={15} /> : <RefreshCcw size={15} />}
+              label="Sync"
+              value={game.synced ? "Synced" : "Pending"}
+            />
+          )}
         </div>
 
-        {/* Completion */}
-        <div className="mb-5">
+        {/* Completion (non-Steam games show it in their own achievements panel) */}
+        <div className={cn("mb-5", game.nonSteam && "hidden")}>
           <div className="mb-2 flex items-baseline justify-between">
             <h3 className="text-sm font-medium text-muted-foreground">Achievements</h3>
             <div className="flex items-center gap-2">
@@ -286,8 +293,8 @@ const GameDetailContent = ({ game }: { game: Game }) => {
           </span>
         </div>
 
-        {/* Per-game stats */}
-        {total > 0 && (
+        {/* Per-game stats: pace needs playtime, which non-Steam games lack */}
+        {total > 0 && !game.nonSteam && (
           <div className="mb-5">
             <h3 className="mb-2 text-sm font-medium text-muted-foreground">Stats</h3>
             <div className="grid grid-cols-2 gap-3">
@@ -383,6 +390,9 @@ const GameDetailContent = ({ game }: { game: Game }) => {
                   )}
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-bold">{recommendedNext.name}</p>
+                    {recommendedNext.description && (
+                      <p className="text-xs text-foreground/80">{recommendedNext.description}</p>
+                    )}
                     <p className="text-xs text-muted-foreground">
                       {recommendedNext.globalUnlockPct
                         ? `${recommendedNext.globalUnlockPct.toFixed(1)}% of players have this — your easiest win`
@@ -390,7 +400,8 @@ const GameDetailContent = ({ game }: { game: Game }) => {
                     </p>
                   </div>
                 </div>
-                <Button asChild size="sm" className="mt-3 w-full">
+                <AchievementTips appid={game.id} name={recommendedNext.name} className="mt-3" />
+                <Button asChild size="sm" variant="outline" className="mt-3 w-full">
                   <a
                     href={youtubeGuideUrl(game.title, recommendedNext.name)}
                     target="_blank"
@@ -435,11 +446,13 @@ const GameDetailContent = ({ game }: { game: Game }) => {
             ) : (
               <div className="flex flex-col">
                 {filtered.map((a) => (
-                  <AchievementRow key={a.id} a={a} gameTitle={game.title} />
+                  <AchievementRow key={a.id} a={a} gameTitle={game.title} gameId={game.id} />
                 ))}
               </div>
             )}
           </div>
+        ) : game.nonSteam ? (
+          <CustomAchievements appid={game.id} />
         ) : (
           <p className="text-sm text-muted-foreground">
             {isSteamApp(game)
@@ -448,6 +461,9 @@ const GameDetailContent = ({ game }: { game: Game }) => {
           </p>
         )}
       </div>
+
+      {/* Footer: non-Steam games launch through Steam too */}
+      {game.nonSteam && game.launchId && isDesktop() && <NonSteamFooter game={game} />}
 
       {/* Footer */}
       {isSteamApp(game) && (
@@ -525,7 +541,60 @@ const GameDetailContent = ({ game }: { game: Game }) => {
   );
 };
 
-const AchievementRow = ({ a, gameTitle }: { a: Achievement; gameTitle: string }) => (
+/** Play and artwork for a game added to Steam as a non-Steam game. */
+const NonSteamFooter = ({ game }: { game: Game }) => {
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+  const findArt = async () => {
+    setBusy(true);
+    setNotice("");
+    const result = await fetchNonSteamArtwork(game.id, true);
+    setBusy(false);
+    if (!result) return;
+    setNotice(
+      result.saved.length
+        ? `Saved ${result.saved.join(", ")} from ${result.source}. Steam shows it after a restart.`
+        : result.error ?? "No artwork found.",
+    );
+  };
+  return (
+    <div className="shrink-0 space-y-2 border-t border-border p-4">
+      <div className="flex gap-2">
+        <Button className="flex-1" onClick={() => void launchGame(game.launchId!)}>
+          <Play size={16} className="mr-2" /> Play
+        </Button>
+        <Button variant="outline" className="flex-1" disabled={busy} onClick={() => void findArt()}>
+          {busy ? <Loader2 size={16} className="mr-2 animate-spin" /> : <ImageIcon size={16} className="mr-2" />}
+          Find artwork
+        </Button>
+      </div>
+      {notice && <p className="text-xs text-muted-foreground" role="status">{notice}</p>}
+    </div>
+  );
+};
+
+/** An achievement in the list; locked ones can expand to written guide help. */
+const AchievementRow = ({ a, gameTitle, gameId }: { a: Achievement; gameTitle: string; gameId: string }) => {
+  const [howOpen, setHowOpen] = useState(false);
+  return (
+    <div>
+      <AchievementRowBody a={a} gameTitle={gameTitle} howOpen={howOpen} onHow={() => setHowOpen((v) => !v)} />
+      {howOpen && <AchievementTips appid={gameId} name={a.name} className="mb-3 ml-[3.25rem]" />}
+    </div>
+  );
+};
+
+const AchievementRowBody = ({
+  a,
+  gameTitle,
+  howOpen,
+  onHow,
+}: {
+  a: Achievement;
+  gameTitle: string;
+  howOpen: boolean;
+  onHow: () => void;
+}) => (
   <div
     className={cn(
       "group flex items-start gap-3 border-t border-border py-2.5",
@@ -562,6 +631,21 @@ const AchievementRow = ({ a, gameTitle }: { a: Achievement; gameTitle: string })
     </div>
 
     <div className="mt-1 flex shrink-0 items-center gap-2">
+      {!a.unlocked && (
+        <button
+          type="button"
+          onClick={onHow}
+          title="How to get it (from the game's Steam guides)"
+          aria-label={`How to get ${a.name}`}
+          aria-expanded={howOpen}
+          className={cn(
+            "transition-colors hover:text-primary group-hover:opacity-100",
+            howOpen ? "text-primary opacity-100" : "text-muted-foreground opacity-60",
+          )}
+        >
+          <BookOpenText size={16} />
+        </button>
+      )}
       <a
         href={youtubeGuideUrl(gameTitle, a.name)}
         target="_blank"

@@ -2,9 +2,14 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Check, EyeOff, Move, Pin, PinOff } from "lucide-react";
 import type { Achievement } from "@/types/game";
 import { fetchSteamAchievements } from "@/lib/steamClient";
-import { getDesktop, getLocalLibrary, onRunningAppChanged } from "@/lib/desktop";
+import { getDesktop, getLocalLibrary, getNonSteamGames, onRunningAppChanged } from "@/lib/desktop";
+import { asAchievements, onCustomAchievementsChanged, readCustomAchievements } from "@/lib/customAchievements";
+
+/** Non-Steam shortcut appids have the high bit set. */
+const isShortcut = (appid: string) => Number(appid) > 0x7fffffff;
 import { usePins } from "@/lib/overlayPins";
 import { GameNotes } from "@/components/GameNotes";
+import { AchievementTips } from "@/components/AchievementTips";
 import { cn } from "@/lib/utils";
 
 /**
@@ -44,8 +49,6 @@ export default function Overlay() {
   const [name, setName] = useState("");
   const [achievements, setAchievements] = useState<Achievement[] | null>(null);
   const [editing, setEditing] = useState(false);
-  const [justUnlocked, setJustUnlocked] = useState<Set<string>>(new Set());
-  const known = useRef<Set<string> | null>(null);
   const card = useRef<HTMLDivElement>(null);
   const { pins, toggle: togglePin, save: savePins } = usePins(appid);
 
@@ -62,26 +65,31 @@ export default function Overlay() {
   useEffect(() => {
     if (!appid) return;
     setName("");
-    void getLocalLibrary().then((games) => setName(games.find((g) => g.appid === appid)?.name ?? ""));
+    if (isShortcut(appid)) {
+      void getNonSteamGames().then((games) => setName(games.find((g) => g.appid === appid)?.name ?? ""));
+    } else {
+      void getLocalLibrary().then((games) => setName(games.find((g) => g.appid === appid)?.name ?? ""));
+    }
   }, [appid]);
 
 
+  // Non-Steam games: the player's own achievement list, live.
   useEffect(() => {
-    if (!appid || !steamId) return;
+    if (!appid || !isShortcut(appid)) return;
+    const load = () => setAchievements(asAchievements(readCustomAchievements(appid)));
+    load();
+    return onCustomAchievementsChanged(load);
+  }, [appid]);
+
+  useEffect(() => {
+    if (!appid || !steamId || isShortcut(appid)) return;
     let cancelled = false;
-    known.current = null;
     setAchievements(null);
 
     const load = async () => {
       try {
         const list = await fetchSteamAchievements(steamId, appid, { fresh: true });
         if (cancelled) return;
-        const unlocked = new Set(list.filter((a) => a.unlocked).map((a) => a.id));
-        if (known.current) {
-          const fresh = [...unlocked].filter((id) => !known.current!.has(id));
-          if (fresh.length) setJustUnlocked((prev) => new Set([...prev, ...fresh]));
-        }
-        known.current = unlocked;
         setAchievements(list);
       } catch {
         /* keep showing what we had; the next poll retries */
@@ -95,10 +103,10 @@ export default function Overlay() {
     };
   }, [appid, steamId]);
 
-  // A pinned achievement drops off once unlocked (after its "just unlocked" moment).
+  // Unlocked achievements leave the overlay straight away, pins included.
   useEffect(() => {
     if (!achievements) return;
-    const done = new Set(achievements.filter((a) => a.unlocked && !justUnlocked.has(a.id)).map((a) => a.id));
+    const done = new Set(achievements.filter((a) => a.unlocked).map((a) => a.id));
     if (pins.some((p) => done.has(p))) savePins(pins.filter((p) => !done.has(p)));
   }, [achievements]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -113,10 +121,9 @@ export default function Overlay() {
   const upNext = sorted.find((a) => !a.unlocked && !pins.includes(a.id));
   const focus = useMemo(() => {
     const byId = new Map(sorted.map((a) => [a.id, a]));
-    const pinned = pins.map((id) => byId.get(id)).filter((a): a is Achievement => Boolean(a));
-    const fresh = sorted.filter((a) => justUnlocked.has(a.id) && !pins.includes(a.id));
-    return [...fresh, ...pinned, ...(upNext ? [upNext] : [])];
-  }, [sorted, pins, justUnlocked, upNext]);
+    const pinned = pins.map((id) => byId.get(id)).filter((a): a is Achievement => Boolean(a) && !a.unlocked);
+    return [...pinned, ...(upNext ? [upNext] : [])];
+  }, [sorted, pins, upNext]);
 
   const earned = achievements?.filter((a) => a.unlocked).length ?? 0;
   const total = achievements?.length ?? 0;
@@ -166,12 +173,16 @@ export default function Overlay() {
         </div>
 
         <div className={cn("min-h-0 px-1.5 py-1", editing && "flex-1 overflow-y-auto")} style={editing ? noDrag : undefined}>
-          {!steamId ? (
+          {!steamId && !(appid && isShortcut(appid)) ? (
             <Hint>Sign in with Steam in Dsync to see achievements.</Hint>
           ) : !achievements ? (
             <Hint>Loading achievements…</Hint>
           ) : total === 0 ? (
-            <Hint>No Steam achievements for this game.</Hint>
+            <Hint>
+              {appid && isShortcut(appid)
+                ? "Add your own achievements for this game in Dsync (open it in your library)."
+                : "No Steam achievements for this game."}
+            </Hint>
           ) : focus.length === 0 ? (
             <Hint>Every achievement unlocked. Nice.</Hint>
           ) : (
@@ -180,8 +191,8 @@ export default function Overlay() {
                 <Row
                   key={a.id}
                   a={a}
-                  label={justUnlocked.has(a.id) ? "Just unlocked" : a.id === upNext?.id ? "Up next" : "Pinned"}
-                  fresh={justUnlocked.has(a.id)}
+                  label={a.id === upNext?.id ? "Up next" : "Pinned"}
+                  tipsFor={appid && !isShortcut(appid) ? appid : undefined}
                   pinned={pins.includes(a.id)}
                   onPin={editing ? () => togglePin(a.id) : undefined}
                 />
@@ -231,22 +242,23 @@ export default function Overlay() {
 function Row({
   a,
   label,
-  fresh = false,
   pinned,
   onPin,
+  tipsFor,
 }: {
   a: Achievement;
   label?: string;
-  fresh?: boolean;
   pinned: boolean;
   onPin?: () => void;
+  /** The game's appid, to show written guide help under the description. */
+  tipsFor?: string;
 }) {
   return (
-    <li className={cn("flex gap-2 rounded-md px-1 py-1", fresh && "bg-success/15")}>
+    <li className="flex gap-2 rounded-md px-1 py-1">
       <img src={a.icon} alt="" className="mt-0.5 h-8 w-8 shrink-0 rounded" />
       <div className="min-w-0 flex-1">
         {label && (
-          <p className={cn("text-[9px] font-semibold uppercase tracking-wide", fresh ? "text-success" : "text-primary")}>
+          <p className="text-[9px] font-semibold uppercase tracking-wide text-primary">
             {label}
           </p>
         )}
@@ -256,6 +268,7 @@ function Row({
           {a.unlocked && <Check className="ml-1 inline h-3 w-3 align-[-1px] text-success" />}
         </p>
         <p className="text-[11px] leading-snug text-muted-foreground">{a.description || "No description"}</p>
+        {tipsFor && !a.unlocked && <AchievementTips appid={tipsFor} name={a.name} compact className="mt-0.5" />}
         <p className="text-[9.5px] tabular-nums text-muted-foreground/80">{a.globalUnlockPct.toFixed(1)}% of players</p>
       </div>
       {onPin && !a.unlocked && (

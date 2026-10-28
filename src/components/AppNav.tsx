@@ -1,5 +1,7 @@
+import { useEffect, useState } from "react";
 import { Link, NavLink } from "react-router-dom";
-import { Library, ListTodo, Newspaper, BarChart3, BookOpen, type LucideIcon } from "lucide-react";
+import { getDesktop } from "@/lib/desktop";
+import { Library, ListTodo, Newspaper, BarChart3, BookOpen, Download, type LucideIcon } from "lucide-react";
 import { AuthButton } from "@/components/AuthButton";
 import { DsyncMark } from "@/components/DsyncMark";
 import { DsyncWordmark } from "@/components/DsyncWordmark";
@@ -14,6 +16,29 @@ const LINKS: Array<{ to: string; label: string; icon: LucideIcon }> = [
   { to: "/stats", label: "Stats", icon: BarChart3 },
   { to: "/wiki", label: "Wiki", icon: BookOpen },
 ];
+
+/** Shown once a new version has downloaded from GitHub; restarts into it. */
+const UpdateButton = () => {
+  const [version, setVersion] = useState<string | null>(null);
+  useEffect(() => {
+    const desktop = getDesktop();
+    if (!desktop) return;
+    void desktop.getPendingUpdate().then(setVersion);
+    return desktop.onUpdateReady(setVersion);
+  }, []);
+  if (!version) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => void getDesktop()?.installUpdate()}
+      title={`Dsync ${version} is downloaded. Restart to install it.`}
+      className="flex items-center gap-1.5 rounded-md border border-primary/60 bg-primary/15 px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/25"
+    >
+      <Download className="h-3.5 w-3.5" />
+      <span className="hidden sm:inline">Update to {version}</span>
+    </button>
+  );
+};
 
 /** Shared sticky top navigation used across the Library, News, and Stats pages. */
 export const AppNav = () => (
@@ -49,6 +74,7 @@ export const AppNav = () => (
       </div>
 
       <div className="flex items-center gap-2">
+        <UpdateButton />
         <ThemePicker />
         <DesktopSettings />
         <AuthButton />

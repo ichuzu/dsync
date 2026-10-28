@@ -4,8 +4,8 @@ import type { ThemeConfig } from "./tokens";
 export const PALETTE_GROUPS = ["Signature", "Neon"] as const;
 export type PaletteGroup = (typeof PALETTE_GROUPS)[number];
 
-/** A named starting point for the theme knobs. */
-export interface Palette extends Omit<ThemeConfig, "presetId" | "mode"> {
+/** A named starting point for the theme knobs. Shape (angles) is the user's own and survives palette changes. */
+export interface Palette extends Omit<ThemeConfig, "presetId" | "mode" | "angle" | "secondaryHue" | "secondarySat"> {
   id: string;
   name: string;
   /** One line shown under the palette name in the picker. */
@@ -208,6 +208,7 @@ export const DEFAULT_THEME: ThemeConfig = {
   neutralHue: DEFAULT_PALETTE.neutralHue,
   neutralSat: DEFAULT_PALETTE.neutralSat,
   radius: DEFAULT_PALETTE.radius,
+  angle: 0,
 };
 
 /** Apply a palette's colours while keeping the user's current light/dark choice. */
@@ -221,10 +222,14 @@ export const applyPalette = (config: ThemeConfig, palette: Palette): ThemeConfig
   neutralHue: palette.neutralHue,
   neutralSat: palette.neutralSat,
   radius: palette.radius,
+  // A preset's secondary follows its primary.
+  secondaryHue: undefined,
+  secondarySat: undefined,
 });
 
 /** True when the config's colours still match the preset it claims to be from. */
 export const matchesPalette = (config: ThemeConfig, palette: Palette) =>
+  config.secondaryHue === undefined &&
   config.primaryHue === palette.primaryHue &&
   config.primarySat === palette.primarySat &&
   config.accentHue === palette.accentHue &&

@@ -2,6 +2,8 @@ import type {
   DsyncBridge,
   LocalGame,
   SteamCollection,
+  NonSteamGame,
+  ArtworkResult,
   SteamStatus,
   DesktopSettings,
 } from "../../electron/ipc";
@@ -44,6 +46,14 @@ export const getLocalLibrary = async (): Promise<LocalGame[]> =>
  */
 export const getSteamCollections = async (steamId?: string): Promise<SteamCollection[]> =>
   (await getDesktop()?.getSteamCollections(steamId)) ?? [];
+
+/** Non-Steam games added to Steam, or an empty list on the web. */
+export const getNonSteamGames = async (steamId?: string): Promise<NonSteamGame[]> =>
+  (await getDesktop()?.getNonSteamGames(steamId)) ?? [];
+
+/** Fetches and saves Steam artwork for a non-Steam game (desktop only). */
+export const fetchNonSteamArtwork = async (appid: string, overwrite = false): Promise<ArtworkResult | null> =>
+  (await getDesktop()?.fetchNonSteamArtwork(appid, overwrite)) ?? null;
 
 export const getSteamStatus = async (): Promise<SteamStatus | null> =>
   (await getDesktop()?.getSteamStatus()) ?? null;
@@ -99,4 +109,4 @@ export const onDownloadsChanged = (fn: (games: LocalGame[]) => void) =>
 export const onRunningAppChanged = (fn: (appid: string | null) => void) =>
   getDesktop()?.onRunningAppChanged(fn) ?? noop;
 
-export type { LocalGame, SteamCollection, SteamStatus, DesktopSettings };
+export type { LocalGame, SteamCollection, NonSteamGame, SteamStatus, DesktopSettings };

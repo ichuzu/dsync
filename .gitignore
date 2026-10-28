@@ -33,3 +33,6 @@ release
 dist-electron
 # Inkscape autosave backups
 public/logos/*.svg.*.svg
+
+# Built from electron/native/dsync-helper.cs by scripts/build-electron.mjs
+build/dsync-helper.exe

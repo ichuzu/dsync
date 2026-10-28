@@ -1,5 +1,8 @@
 import { build, context } from "esbuild";
-import { rm } from "node:fs/promises";
+import { rm, stat } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { join } from "node:path";
 
 /**
  * Builds the Electron main and preload bundles.
@@ -44,6 +47,31 @@ function nodeBuiltins() {
 }
 
 await rm("dist-electron", { recursive: true, force: true });
+
+/**
+ * build/dsync-helper.exe: the small Windows helper the main process asks
+ * about focus, the registry and running processes (electron/winHelper.ts).
+ * Compiled with the C# compiler that ships with Windows (.NET Framework 4),
+ * so nothing extra is installed. Skipped when it is already newer than its
+ * source, and on other platforms; if it can't be built, the app falls back
+ * to a PowerShell version of the same helper.
+ */
+async function buildHelper() {
+  if (process.platform !== "win32") return;
+  // join() for backslashes: csc reads "/" inside an argument as a switch.
+  const source = join("electron", "native", "dsync-helper.cs");
+  const output = join("build", "dsync-helper.exe");
+  const [src, out] = await Promise.all([stat(source), stat(output).catch(() => null)]);
+  if (out && out.mtimeMs >= src.mtimeMs) return;
+  const csc = join(process.env.WINDIR ?? "C:/Windows", "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe");
+  try {
+    await promisify(execFile)(csc, ["-nologo", "-optimize+", "-target:exe", `-out:${output}`, source]);
+    console.log("[electron] built dsync-helper.exe");
+  } catch (err) {
+    console.warn("[electron] couldn't build dsync-helper.exe; the PowerShell fallback will be used:", err.message);
+  }
+}
+await buildHelper();
 
 const targets = [
   { ...shared, entryPoints: { main: "electron/main.ts" } },

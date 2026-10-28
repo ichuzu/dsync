@@ -12,7 +12,7 @@ import {
   globalShortcut,
 } from "electron";
 import { readFile, writeFile, mkdir, readdir, unlink } from "node:fs/promises";
-import { createReadStream, existsSync } from "node:fs";
+import { createReadStream, existsSync, watch } from "node:fs";
 import { join, normalize, sep } from "node:path";
 import { Readable } from "node:stream";
 
@@ -22,8 +22,9 @@ import {
   type DesktopSettings,
   type RedactedSettings,
   type SteamStatus,
+  type ArtworkResult,
 } from "./ipc";
-import { scanLocalLibrary, type LocalGame } from "./steam/localLibrary";
+import { findLibraryFolders, scanLocalLibrary, type LocalGame } from "./steam/localLibrary";
 import {
   getRunningAppId,
   installGame,
@@ -34,8 +35,11 @@ import {
 import { findSteamRoot } from "./steam/paths";
 import { readTaskbarTheme, watchTaskbarTheme } from "./taskbarTheme";
 import { toIco } from "./ico";
-import { getForegroundWindow, setForegroundWindow, stopForegroundHelper, warmForegroundHelper } from "./foreground";
+import { installUpdateNow, pendingUpdate, startAutoUpdates } from "./updater";
+import { getForegroundWindow, setForegroundWindow, stopWinHelper, warmWinHelper } from "./winHelper";
 import { readSteamCollections } from "./steam/collections";
+import { readNonSteamGames, runningShortcut, shortcutInfo } from "./steam/shortcuts";
+import { findArtwork, saveArtwork } from "./steam/artwork";
 import { cancelSteamSignIn, signInWithSteam } from "./steam/openid";
 import { createSteamCache, handleSteamRequest } from "../src/server/steamRouter";
 
@@ -98,8 +102,12 @@ async function saveSettings(patch: Partial<DesktopSettings>): Promise<DesktopSet
 
 /** A copy safe to send to the renderer, with the secret replaced by a flag. */
 function redactSettings(s: DesktopSettings): RedactedSettings {
-  const { steamApiKey: key, ...rest } = s;
-  return { ...rest, hasSteamApiKey: Boolean(key?.trim() || process.env.STEAM_API_KEY?.trim()) };
+  const { steamApiKey: key, steamGridDbKey: gridKey, ...rest } = s;
+  return {
+    ...rest,
+    hasSteamApiKey: Boolean(key?.trim() || process.env.STEAM_API_KEY?.trim()),
+    hasSteamGridDbKey: Boolean(gridKey?.trim() || process.env.STEAMGRIDDB_API_KEY?.trim()),
+  };
 }
 
 function applyLoginItem(): void {
@@ -194,15 +202,34 @@ const send = (channel: string, payload: unknown) => {
 };
 
 /**
- * Polls Steam's on-disk state and pushes changes to the renderer.
+ * Keeps the renderer up to date with installs, downloads and the running game.
  *
- * Polling rather than fs.watch: Steam rewrites an app manifest continuously
- * while downloading, and a watcher fires far more often than the UI can use.
- * A rescan of ~60 manifests costs a couple of milliseconds, and diffing means
- * the renderer only wakes when something actually changed.
+ * Installs and downloads: Steam rewrites an app's manifest whenever its state
+ * changes, so the library folders are watched and only re-read when one of
+ * them changes (a burst of writes, as during a download, is debounced into
+ * one re-read). While a download is running the manifests are also re-read
+ * every couple of seconds, for a live progress bar; otherwise a slow poll is
+ * just a safety net for missed watch events (network drives, new folders).
+ *
+ * The running game is checked every few seconds; that is one cheap question
+ * to the long-lived helper (see winHelper.ts), not a spawned process.
  */
 function startWatchers(): void {
-  const tick = async () => {
+  const DOWNLOAD_POLL_MS = 2500;
+  const IDLE_POLL_MS = 60_000;
+  const RUNNING_POLL_MS = 2500;
+
+  let scanning = false;
+  let rescanQueued = false;
+  let lastScan = 0;
+
+  const scan = async () => {
+    if (scanning) {
+      rescanQueued = true;
+      return;
+    }
+    scanning = true;
+    lastScan = Date.now();
     try {
       const games = await scanLocalLibrary();
 
@@ -223,11 +250,42 @@ function startWatchers(): void {
         if (finished) notify("Download complete", "Your Steam downloads have finished.");
       }
     } catch {
-      // A drive went away mid-scan; the next tick will pick it back up.
+      // A drive went away mid-scan; the next scan will pick it back up.
+    } finally {
+      scanning = false;
+      if (rescanQueued) {
+        rescanQueued = false;
+        void scan();
+      }
     }
+  };
 
+  // Watch every steamapps folder; a burst of writes becomes one re-read.
+  let debounce: NodeJS.Timeout | undefined;
+  const onFolderChange = (_event: string, file: string | Buffer | null) => {
+    if (file && !String(file).toLowerCase().endsWith(".acf")) return;
+    clearTimeout(debounce);
+    debounce = setTimeout(() => void scan(), 750);
+  };
+  void findLibraryFolders().then((folders) => {
+    for (const folder of folders) {
+      try {
+        watch(folder, { persistent: false }, onFolderChange);
+      } catch {
+        // Unwatchable (permissions, odd drive): the slow poll covers it.
+      }
+    }
+  });
+
+  setInterval(() => {
+    const interval = lastDownloads ? DOWNLOAD_POLL_MS : IDLE_POLL_MS;
+    if (Date.now() - lastScan >= interval) void scan();
+  }, DOWNLOAD_POLL_MS);
+
+  const checkRunning = async () => {
     try {
-      const running = await getRunningAppId();
+      // Steam apps from the registry; non-Steam games by their process.
+      const running = (await getRunningAppId()) ?? (await runningShortcut());
       if (running !== lastRunning) {
         const started = running && running !== lastRunning;
         lastRunning = running;
@@ -240,12 +298,13 @@ function startWatchers(): void {
         }
       }
     } catch {
-      // reg.exe unavailable — presence just stays unknown.
+      // Helper unavailable: presence just stays unknown until it's back.
     }
   };
 
-  void tick();
-  setInterval(tick, 2500);
+  void scan();
+  void checkRunning();
+  setInterval(checkRunning, RUNNING_POLL_MS);
 }
 
 function notify(title: string, body: string): void {
@@ -415,12 +474,23 @@ function showWindow(): void {
   mainWindow.focus();
 }
 
+/** Quits for real (not to the tray) and installs the downloaded update. */
+function restartToUpdate(): void {
+  quitting = true;
+  installUpdateNow();
+}
+
 function createTray(): void {
+  // Rebuilt when an update arrives, to add the "Restart to update" item.
+  tray?.destroy();
   tray = new Tray(appIcon());
   tray.setToolTip("Dsync");
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: "Open Dsync", click: showWindow },
+      ...(pendingUpdate()
+        ? [{ label: `Restart to update (${pendingUpdate()})`, click: restartToUpdate }]
+        : []),
       { type: "separator" },
       {
         label: "Start with Windows",
@@ -458,6 +528,32 @@ function registerIpc(): void {
   });
 
   ipcMain.handle(CHANNELS.runningApp, () => getRunningAppId());
+  ipcMain.handle(CHANNELS.nonSteamGames, (_e, steamId?: string) =>
+    readNonSteamGames(typeof steamId === "string" ? steamId : undefined),
+  );
+  ipcMain.handle(CHANNELS.pendingUpdate, () => pendingUpdate());
+  ipcMain.handle(CHANNELS.installUpdate, () => restartToUpdate());
+  ipcMain.handle(CHANNELS.nonSteamArtwork, async (_e, appid: unknown, overwrite: unknown): Promise<ArtworkResult> => {
+    const info = typeof appid === "string" ? shortcutInfo(appid) : null;
+    if (!info) return { saved: [], source: null, error: "Unknown non-Steam game." };
+    const gridKey = settings.steamGridDbKey?.trim() || process.env.STEAMGRIDDB_API_KEY?.trim();
+    try {
+      const set = await findArtwork(info.name, gridKey);
+      if (!set) {
+        return {
+          saved: [],
+          source: null,
+          error: gridKey
+            ? "No artwork found for this game on the Steam store or SteamGridDB."
+            : "Not on the Steam store. Add a free SteamGridDB key in Settings to find art for it.",
+        };
+      }
+      const saved = await saveArtwork(info.gridDir, appid as string, set, overwrite === true);
+      return { saved, source: set.source };
+    } catch (err) {
+      return { saved: [], source: null, error: err instanceof Error ? err.message : "Couldn't fetch artwork." };
+    }
+  });
   ipcMain.handle(CHANNELS.steamCollections, (_e, steamId?: string) =>
     readSteamCollections(typeof steamId === "string" ? steamId : undefined),
   );
@@ -601,7 +697,17 @@ function openOverlay(appid: string): void {
   });
   // Shown without taking focus, so the game keeps it.
   overlayWindow.once("ready-to-show", () => overlayWindow?.showInactive());
+  // Some games push themselves in front of always-on-top windows when they
+  // get focus; re-asserting every couple of seconds brings the overlay back
+  // without taking focus. (Nothing can draw over exclusive fullscreen.)
+  const keepOnTop = setInterval(() => {
+    const win = liveOverlay();
+    if (!win || overlayEditing || !win.isVisible()) return;
+    win.setAlwaysOnTop(true, "screen-saver");
+    win.moveTop();
+  }, 2000);
   overlayWindow.on("closed", () => {
+    clearInterval(keepOnTop);
     overlayWindow = null;
     overlayEditing = false;
   });
@@ -692,7 +798,7 @@ function nativeHandle(win: BrowserWindow): string {
 let overlayPrevFocus: string | null = null;
 
 function registerOverlayHotkey(): void {
-  warmForegroundHelper();
+  warmWinHelper();
   globalShortcut.register(OVERLAY_HOTKEY, async () => {
     if (!overlayEditing && liveOverlay()) overlayPrevFocus = await getForegroundWindow();
     setOverlayEditing(!overlayEditing);
@@ -708,7 +814,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on("second-instance", showWindow);
   app.on("will-quit", () => {
     globalShortcut.unregisterAll();
-    stopForegroundHelper();
+    stopWinHelper();
   });
 
   void app.whenReady().then(async () => {
@@ -719,6 +825,15 @@ if (!app.requestSingleInstanceLock()) {
     createTray();
     void restoreTaskbarIcon();
     registerOverlayHotkey();
+    startAutoUpdates((version) => {
+      send(CHANNELS.onUpdateReady, version);
+      createTray();
+      if (settings.notifications) {
+        const note = new Notification({ title: `Dsync ${version} is ready`, body: "Click to restart and update, or it installs next time you quit.", icon: appIcon() });
+        note.on("click", restartToUpdate);
+        note.show();
+      }
+    });
     startWatchers();
     watchTaskbarTheme((theme) => send(CHANNELS.onTaskbarThemeChanged, theme));
 
